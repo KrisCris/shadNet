@@ -27,6 +27,7 @@ namespace {
 constexpr int ERR_BAD_REQUEST = 4000;
 constexpr int ERR_INVALID_CREDENTIALS = 4010;
 constexpr int ERR_MISSING_TOKEN = 4011;
+constexpr int ERR_BAD_API_KEY = 4013;
 constexpr int ERR_INVALID_TOKEN = 4012;
 constexpr int ERR_NOT_ADMIN = 4030;
 constexpr int ERR_FORBIDDEN_TARGET = 4031;
@@ -34,7 +35,6 @@ constexpr int ERR_NOT_FOUND = 4040;
 constexpr int ERR_TOO_MANY_ATTEMPTS = 4290;
 constexpr int ERR_INTERNAL = 5000;
 
-// Brute-force protection on POST /admin/v1/login.
 constexpr int kMaxLoginFailures = 5;
 constexpr int kLoginBlockSeconds = 300;
 
@@ -79,6 +79,15 @@ UserFilter ParseFilter(const QString& raw) {
     return UserFilter::All;
 }
 
+bool SecretsEqual(const QByteArray& a, const QByteArray& b) {
+    if (a.size() != b.size())
+        return false;
+    unsigned char diff = 0;
+    for (int i = 0; i < a.size(); ++i)
+        diff |= static_cast<unsigned char>(a[i] ^ b[i]);
+    return diff == 0;
+}
+
 QString PeerKey(const QHttpServerRequest& req) {
     const QHostAddress addr = req.remoteAddress();
     return addr.isNull() ? QStringLiteral("unknown") : addr.toString();
@@ -115,6 +124,36 @@ bool AdminApiServer::Start(ConfigManager* config, const QString& dbPath, SharedS
     m_tcp = std::make_unique<QTcpServer>(this);
     const QString host = m_config->GetAdminApiHost();
     const quint16 port = m_config->GetAdminApiPort().toUShort();
+
+    const bool loopback = (host == QStringLiteral("127.0.0.1") || host == QStringLiteral("::1") ||
+                           host == QStringLiteral("localhost"));
+
+    if (!m_config->IsAdminApiKeyRequired() && !loopback) {
+        const QString generated = m_config->EnsureAdminApiKey();
+        if (generated.isEmpty()) {
+            qCritical() << "AdminApiServer: refusing to start. AdminApiHost is" << host
+                        << "but AdminApiKey is empty and a key could not be generated. Set "
+                           "AdminApiKey in shadnet.cfg (for example: openssl rand -hex 32), "
+                           "or bind AdminApiHost to 127.0.0.1.";
+            return false;
+        }
+        qWarning().noquote()
+            << "\n"
+               "  ┌──────────────────────────────────────────────────────────────────────┐\n"
+               "  │ A new admin API key was generated and saved to shadnet.cfg.          │\n"
+               "  │ Enter it in the admin tool to sign in. It is not shown again.        │\n"
+               "  └──────────────────────────────────────────────────────────────────────┘\n"
+               "\n    AdminApiKey = "
+            << generated << "\n";
+    }
+
+    if (m_config->IsAdminApiKeyRequired()) {
+        qInfo() << "AdminApiServer: API key required on every request";
+    } else {
+        qWarning() << "AdminApiServer: no AdminApiKey set. Sign-in needs only an admin npid "
+                      "and password. Acceptable on loopback; set a key before changing "
+                      "AdminApiHost.";
+    }
     if (!m_tcp->listen(QHostAddress(host), port)) {
         qCritical() << "AdminApiServer: failed to bind" << host << ":" << port << "—"
                     << m_tcp->errorString();
@@ -126,9 +165,10 @@ bool AdminApiServer::Start(ConfigManager* config, const QString& dbPath, SharedS
     }
 
     qInfo().nospace().noquote() << "AdminApiServer listening on: " << host << ":" << port;
-    if (host != QStringLiteral("127.0.0.1") && host != QStringLiteral("::1")) {
+    if (!loopback) {
         qWarning() << "AdminApiServer is reachable beyond localhost. Traffic is plain HTTP, so "
-                      "put it behind a TLS reverse proxy or a VPN.";
+                      "the API key and admin password cross the network in the clear: put it "
+                      "behind a TLS reverse proxy or a VPN.";
     }
     return true;
 }
@@ -193,6 +233,9 @@ void AdminApiServer::PurgeExpiredSessions() {
 
 std::optional<AdminApiServer::AdminSession> AdminApiServer::Authenticate(
     const QHttpServerRequest& req) {
+    if (!CheckApiKey(req))
+        return std::nullopt;
+
     const QByteArray rawAuth = req.value("Authorization");
     if (rawAuth.isEmpty())
         return std::nullopt;
@@ -219,7 +262,27 @@ std::optional<AdminApiServer::AdminSession> AdminApiServer::Authenticate(
     return *it;
 }
 
+bool AdminApiServer::CheckApiKey(const QHttpServerRequest& req) const {
+    const QString configured = m_config->GetAdminApiKey();
+    if (configured.isEmpty())
+        return true; // no key configured, nothing to check
+    return SecretsEqual(req.value("X-Admin-Api-Key"), configured.toUtf8());
+}
+
+QHttpServerResponse AdminApiServer::ApiKeyError(const QHttpServerRequest& req) const {
+    const bool absent = req.value("X-Admin-Api-Key").isEmpty();
+    qWarning().nospace().noquote() << "AdminApi: rejected request from " << PeerKey(req)
+                                   << " — API key " << (absent ? "not supplied" : "did not match");
+    return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_BAD_API_KEY,
+                     QStringLiteral("This server requires an admin API key. Set it in the "
+                                    "admin tool, or ask a server operator for the value of "
+                                    "AdminApiKey in shadnet.cfg."));
+}
+
 QHttpServerResponse AdminApiServer::AuthError(const QHttpServerRequest& req) const {
+    if (!CheckApiKey(req))
+        return ApiKeyError(req);
+
     const QString authStr = QString::fromUtf8(req.value("Authorization")).trimmed();
     if (authStr.isEmpty()) {
         return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_MISSING_TOKEN,
@@ -301,6 +364,8 @@ void AdminApiServer::CleanUpAfterDataRemoval(int64_t userId, const PurgeSummary&
                       "are now orphaned and will be swept on the next restart.";
     }
 
+    // Evict from the in-memory leaderboards, or the boards keep serving the scores
+    // that were just deleted from the database.
     if (m_shared && m_shared->scoreCache)
         cachedScoresDropped = m_shared->scoreCache->RemoveUser(userId);
 }
@@ -337,19 +402,23 @@ QJsonObject AdminApiServer::UserRowToJson(const AdminUserRow& row) const {
     return o;
 }
 
-// Routes
+// ── Routes ────────────────────────────────────────────────────────────────────
 
 void AdminApiServer::RegisterRoutes() {
     // Unauthenticated reachability probe, so the tool can tell "wrong address"
     // apart from "wrong password" before anyone types a credential.
-    m_http->route("/admin/v1/status", QHttpServerRequest::Method::Get,
-                  [](const QHttpServerRequest&) {
-                      QJsonObject body;
-                      body.insert(QStringLiteral("ok"), true);
-                      body.insert(QStringLiteral("service"), QStringLiteral("shadnet-admin"));
-                      body.insert(QStringLiteral("apiVersion"), 1);
-                      return JsonOk(body);
-                  });
+    m_http->route(
+        "/admin/v1/status", QHttpServerRequest::Method::Get, [this](const QHttpServerRequest&) {
+            QJsonObject body;
+            body.insert(QStringLiteral("ok"), true);
+            body.insert(QStringLiteral("service"), QStringLiteral("shadnet-admin"));
+            body.insert(QStringLiteral("apiVersion"), 1);
+            // Says only that a key is required, never anything about its
+            // value. Lets the tool ask for one up front instead of failing
+            // the sign-in with a confusing error.
+            body.insert(QStringLiteral("requiresApiKey"), m_config->IsAdminApiKeyRequired());
+            return JsonOk(body);
+        });
 
     // POST /admin/v1/login — { npid, password } -> { token, expiresInSeconds, ... }
     m_http->route(
@@ -362,6 +431,10 @@ void AdminApiServer::RegisterRoutes() {
                     QHttpServerResponse::StatusCode::TooManyRequests, ERR_TOO_MANY_ATTEMPTS,
                     QStringLiteral("Too many failed sign-ins. Try again in %1 seconds.")
                         .arg(retryAfter));
+            }
+            if (!CheckApiKey(req)) {
+                NoteLoginFailure(peer);
+                return ApiKeyError(req);
             }
 
             QString parseError;
@@ -381,8 +454,6 @@ void AdminApiServer::RegisterRoutes() {
             if (!user) {
                 NoteLoginFailure(peer);
                 qWarning() << "AdminApi: failed sign-in for" << npid << "from" << peer;
-                // Same message for unknown npid and wrong password: don't confirm
-                // which accounts exist.
                 return JsonError(QHttpServerResponse::StatusCode::Unauthorized,
                                  ERR_INVALID_CREDENTIALS,
                                  QStringLiteral("That npid and password don't match an account."));
@@ -417,6 +488,9 @@ void AdminApiServer::RegisterRoutes() {
     // POST /admin/v1/logout — revokes the presented token.
     m_http->route("/admin/v1/logout", QHttpServerRequest::Method::Post,
                   [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+                      if (!CheckApiKey(req))
+                          return ApiKeyError(req);
+
                       const QByteArray rawAuth = req.value("Authorization");
                       const QString authStr = QString::fromUtf8(rawAuth).trimmed();
                       if (authStr.startsWith(QStringLiteral("Bearer "), Qt::CaseInsensitive)) {

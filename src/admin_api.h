@@ -21,7 +21,6 @@ class AdminApiServer : public QObject {
 public:
     explicit AdminApiServer(QObject* parent = nullptr);
     ~AdminApiServer();
-
     bool Start(ConfigManager* config, const QString& dbPath, SharedState* shared);
     int SyncConfigAdmins();
 
@@ -39,7 +38,8 @@ private:
     };
 
     void RegisterRoutes();
-
+    bool CheckApiKey(const QHttpServerRequest& req) const;
+    QHttpServerResponse ApiKeyError(const QHttpServerRequest& req) const;
     std::optional<AdminSession> Authenticate(const QHttpServerRequest& req);
     QHttpServerResponse AuthError(const QHttpServerRequest& req) const;
 
@@ -64,7 +64,7 @@ private:
     bool DeleteAccount(int64_t userId, PurgeSummary& summary, int& cachedScoresDropped,
                        int& blobsDeleted);
 
-    // Filesystem + cache cleanup that follows either of the two above.
+    // Filesystem + cache cleanup that follows either of the two above. 
     void CleanUpAfterDataRemoval(int64_t userId, const PurgeSummary& summary,
                                  int& cachedScoresDropped, int& blobsDeleted);
 

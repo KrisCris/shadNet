@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <QDebug>
 #include <QFile>
+#include <QRandomGenerator>
 #include <QSettings>
 #include <QTextStream>
 #include "config.h"
@@ -19,6 +20,32 @@ void ConfigManager::LoadBannedDomains() {
             m_bannedDomains.insert(d);
     }
     qInfo() << "Loaded" << m_bannedDomains.size() << "banned domains";
+}
+
+QString ConfigManager::EnsureAdminApiKey() {
+    QWriteLocker lk(&m_lock);
+    if (!m_adminApiKey.isEmpty())
+        return QString();
+
+    static const QString chars = QStringLiteral("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                                "abcdefghijklmnopqrstuvwxyz"
+                                                "0123456789");
+    QString key;
+    key.reserve(48);
+    QRandomGenerator* gen = QRandomGenerator::system();
+    for (int i = 0; i < 48; ++i)
+        key.append(chars.at(gen->bounded(chars.size())));
+
+    QSettings s(m_path, QSettings::IniFormat);
+    s.setValue(QStringLiteral("AdminApiKey"), key);
+    s.sync();
+    if (s.status() != QSettings::NoError) {
+        qCritical() << "Could not write a generated AdminApiKey to" << m_path;
+        return QString();
+    }
+
+    m_adminApiKey = key;
+    return key;
 }
 
 void ConfigManager::Parse(const QString& path) {
@@ -59,6 +86,9 @@ void ConfigManager::Parse(const QString& path) {
     m_adminApiHost = str("AdminApiHost", "127.0.0.1");
     m_adminApiPort = str("AdminApiPort", "31350");
     m_adminSessionMinutes = str("AdminSessionMinutes", "480").toInt();
+    m_adminApiKey = str("AdminApiKey", "");
+    // Accounts named here are granted admin in the database at startup. This is the
+    // only way to create the first admin on a fresh install.
     m_adminsList = strList("AdminsList");
     m_registrationSecretKey = str("RegistrationSecretKey", "");
 

@@ -67,6 +67,15 @@ public:
         QReadLocker lk(&m_lock);
         return m_adminSessionMinutes;
     }
+    QString GetAdminApiKey() const {
+        QReadLocker lk(&m_lock);
+        return m_adminApiKey;
+    }
+    bool IsAdminApiKeyRequired() const {
+        QReadLocker lk(&m_lock);
+        return !m_adminApiKey.isEmpty();
+    }
+    QString EnsureAdminApiKey();
     QStringList GetAdminsList() const {
         QReadLocker lk(&m_lock);
         return m_adminsList;
@@ -133,6 +142,7 @@ private:
     QString m_adminApiHost = "0.0.0.0";
     QString m_adminApiPort = "31350";
     int m_adminSessionMinutes = 480;
+    QString m_adminApiKey;
     QStringList m_adminsList;
     QSet<QString> m_bannedDomains;
     // When non-empty, registrations must supply this key or they are rejected.
