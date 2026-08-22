@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "stats_server.h"
 
+#include "version.h"
+
 #include <QDebug>
 #include <QHostAddress>
 #include <QHttpServerRequest>
@@ -82,6 +84,10 @@ bool StatsServer::Start(ConfigManager* config, ScoreCache* scoreCache, const Sha
 
 void StatsServer::RegisterRoutes() {
     const QString base = QStringLiteral("/") + m_path;
+
+    // GET /<statsPath>/version -> server version and when this binary was built.
+    m_http->route(base + "/version",
+                  [this](const QHttpServerRequest&) { return jsonResponse(BuildVersionJson()); });
 
     // GET /<path>/usage
     m_http->route(base + "/usage", [this](const QHttpServerRequest&) {
@@ -219,6 +225,16 @@ QByteArray StatsServer::BuildBoardScoreJson(const QString& comId, uint32_t board
     root.insert("last_sort_date", static_cast<qint64>(resp.lastsortdate()));
     root.insert("ranks", ranksToJson(resp));
     return toJson(root);
+}
+
+QByteArray StatsServer::BuildVersionJson() const {
+    QJsonObject body;
+    body.insert(QStringLiteral("version"), ShadNet::Version());
+    body.insert(QStringLiteral("buildDate"), ShadNet::BuildDate());
+    body.insert(QStringLiteral("buildTime"), ShadNet::BuildTime());
+    // Combined ISO 8601 form, for callers that would rather parse one field.
+    body.insert(QStringLiteral("buildTimestamp"), ShadNet::BuildTimestamp());
+    return toJson(body);
 }
 
 QByteArray StatsServer::BuildScoreListJson() const {

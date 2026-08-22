@@ -20,6 +20,7 @@
 #include "client_session.h" // SharedState
 #include "score_cache.h"
 #include "score_files.h"
+#include "version.h"
 
 namespace {
 
@@ -372,20 +373,28 @@ QJsonObject AdminApiServer::UserRowToJson(const AdminUserRow& row) const {
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 void AdminApiServer::RegisterRoutes() {
-    // Unauthenticated reachability probe, so the tool can tell "wrong address"
-    // apart from "wrong password" before anyone types a credential.
     m_http->route(
         "/admin/v1/status", QHttpServerRequest::Method::Get, [this](const QHttpServerRequest&) {
             QJsonObject body;
             body.insert(QStringLiteral("ok"), true);
             body.insert(QStringLiteral("service"), QStringLiteral("shadnet-admin"));
             body.insert(QStringLiteral("apiVersion"), 1);
-            // Says only that a key is required, never anything about its
-            // value. Lets the tool ask for one up front instead of failing
-            // the sign-in with a confusing error.
             body.insert(QStringLiteral("requiresApiKey"), m_config->IsAdminApiKeyRequired());
+            body.insert(QStringLiteral("version"), ShadNet::Version());
+            body.insert(QStringLiteral("buildTimestamp"), ShadNet::BuildTimestamp());
             return JsonOk(body);
         });
+
+    // GET /admin/v1/version
+    m_http->route("/admin/v1/version", QHttpServerRequest::Method::Get,
+                  [](const QHttpServerRequest&) {
+                      QJsonObject body;
+                      body.insert(QStringLiteral("version"), ShadNet::Version());
+                      body.insert(QStringLiteral("buildDate"), ShadNet::BuildDate());
+                      body.insert(QStringLiteral("buildTime"), ShadNet::BuildTime());
+                      body.insert(QStringLiteral("buildTimestamp"), ShadNet::BuildTimestamp());
+                      return JsonOk(body);
+                  });
 
     // POST /admin/v1/login — { npid, password } -> { token, expiresInSeconds, ... }
     m_http->route(

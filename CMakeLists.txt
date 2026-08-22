@@ -88,6 +88,9 @@ set(SOURCES
     # Admin HTTP/JSON listener
     src/admin_api.h
     src/admin_api.cpp
+    # Version / build stamp
+    src/version.h
+    src/version.cpp
     # TUS
     src/cmd_tus.cpp
     src/tus_db.cpp
