@@ -100,6 +100,13 @@ bool Database::Exec(QSqlQuery& q) {
     return true;
 }
 
+bool Database::HasMigration(int id) {
+    QSqlQuery q(m_db);
+    q.prepare("SELECT COUNT(*) FROM migration WHERE migration_id=?");
+    q.addBindValue(id);
+    return Exec(q) && q.next() && q.value(0).toInt() > 0;
+}
+
 bool Database::Migrate() {
     Exec("CREATE TABLE IF NOT EXISTS migration("
          "  migration_id UNSIGNED INTEGER PRIMARY KEY,"
@@ -232,6 +239,28 @@ bool Database::Migrate() {
     QSqlQuery ins2(m_db);
     ins2.prepare("INSERT OR IGNORE INTO migration VALUES(2,'title_name mapping')");
     Exec(ins2);
+
+    if (!HasMigration(3)) {
+        Exec("ALTER TABLE account ADD COLUMN ban_reason TEXT");
+        Exec("ALTER TABLE account ADD COLUMN ban_timestamp INTEGER");
+
+        // Append-only record of every privileged action taken through the admin API.
+        Exec("CREATE TABLE IF NOT EXISTS admin_audit("
+             "  id             INTEGER PRIMARY KEY AUTOINCREMENT,"
+             "  timestamp      INTEGER NOT NULL,"
+             "  actor_user_id  INTEGER NOT NULL,"
+             "  actor_npid     TEXT    NOT NULL,"
+             "  action         TEXT    NOT NULL,"
+             "  target_user_id INTEGER,"
+             "  target_npid    TEXT,"
+             "  reason         TEXT)");
+        Exec("CREATE INDEX IF NOT EXISTS admin_audit_time ON admin_audit(timestamp DESC)");
+
+        QSqlQuery ins3(m_db);
+        ins3.prepare("INSERT OR IGNORE INTO migration VALUES(3,'admin tooling: ban metadata + "
+                     "audit log')");
+        Exec(ins3);
+    }
 
     qInfo() << "Database migrations complete";
 
@@ -534,12 +563,176 @@ bool Database::UpdateLoginTime(int64_t userId) {
     return Exec(q);
 }
 
-bool Database::BanUser(int64_t userId, bool ban) {
+bool Database::BanUser(int64_t userId, bool ban, const QString& reason) {
     QSqlQuery q(m_db);
-    q.prepare("UPDATE account SET banned=? WHERE user_id=?");
+    q.prepare("UPDATE account SET banned=?, ban_reason=?, ban_timestamp=? WHERE user_id=?");
     q.addBindValue(ban ? 1 : 0);
+    // Unbanning clears the reason so a stale note never outlives the ban itself.
+    // A default-constructed QVariant binds as SQL NULL.
+    q.addBindValue(ban && !reason.isEmpty() ? QVariant(reason) : QVariant());
+    q.addBindValue(ban ? QVariant(QDateTime::currentSecsSinceEpoch()) : QVariant());
     q.addBindValue(static_cast<qlonglong>(userId));
+    if (!Exec(q))
+        return false;
+    return q.numRowsAffected() > 0;
+}
+
+QString Database::BuildUserFilterClause(const QString& search, UserFilter filter) {
+    QStringList clauses;
+    switch (filter) {
+    case UserFilter::BannedOnly:
+        clauses << "a.banned = 1";
+        break;
+    case UserFilter::AdminsOnly:
+        clauses << "a.admin = 1";
+        break;
+    case UserFilter::ActiveOnly:
+        clauses << "a.banned = 0";
+        break;
+    case UserFilter::All:
+        break;
+    }
+    if (!search.isEmpty()) {
+        // ESCAPE keeps a literal % or _ in the search box from turning into a wildcard.
+        clauses << "(a.username LIKE ? ESCAPE '\\' OR a.email LIKE ? ESCAPE '\\')";
+    }
+    return clauses.isEmpty() ? QString() : QStringLiteral(" WHERE ") + clauses.join(" AND ");
+}
+
+void Database::BindUserFilter(QSqlQuery& q, const QString& search) {
+    if (search.isEmpty())
+        return;
+    QString escaped = search;
+    escaped.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    const QString pattern = QStringLiteral("%%%1%%").arg(escaped);
+    q.addBindValue(pattern);
+    q.addBindValue(pattern);
+}
+
+QList<AdminUserRow> Database::ListUsers(const QString& search, UserFilter filter, int limit,
+                                        int offset) {
+    QList<AdminUserRow> rows;
+    if (limit <= 0)
+        return rows;
+
+    const QString sql =
+        QStringLiteral("SELECT a.user_id, a.username, a.email, a.admin, a.stat_agent, a.banned, "
+                       "a.ban_reason, a.ban_timestamp, t.creation, t.last_login "
+                       "FROM account a LEFT JOIN account_timestamp t ON t.user_id = a.user_id") +
+        BuildUserFilterClause(search, filter) +
+        QStringLiteral(" ORDER BY a.user_id ASC LIMIT ? OFFSET ?");
+
+    QSqlQuery q(m_db);
+    if (!q.prepare(sql)) {
+        m_lastError = q.lastError().text();
+        qWarning() << "ListUsers: prepare failed:" << m_lastError;
+        return rows;
+    }
+    BindUserFilter(q, search);
+    q.addBindValue(limit);
+    q.addBindValue(qMax(0, offset));
+    if (!Exec(q)) {
+        qWarning() << "ListUsers: exec failed:" << m_lastError;
+        return rows;
+    }
+
+    while (q.next()) {
+        AdminUserRow r;
+        r.userId = q.value(0).toLongLong();
+        r.username = q.value(1).toString();
+        r.email = q.value(2).toString();
+        r.admin = q.value(3).toBool();
+        r.statAgent = q.value(4).toBool();
+        r.banned = q.value(5).toBool();
+        r.banReason = q.value(6).toString();
+        r.banTimestamp = q.value(7).toLongLong();
+        r.creation = q.value(8).toLongLong();
+        r.lastLogin = q.value(9).toLongLong();
+        rows.append(r);
+    }
+    return rows;
+}
+
+int Database::CountUsers(const QString& search, UserFilter filter) {
+    const QString sql =
+        QStringLiteral("SELECT COUNT(*) FROM account a") + BuildUserFilterClause(search, filter);
+    QSqlQuery q(m_db);
+    if (!q.prepare(sql)) {
+        m_lastError = q.lastError().text();
+        return 0;
+    }
+    BindUserFilter(q, search);
+    return (Exec(q) && q.next()) ? q.value(0).toInt() : 0;
+}
+
+int Database::CountUsersWhere(UserFilter filter) {
+    return CountUsers(QString(), filter);
+}
+
+std::optional<AdminUserRow> Database::GetUserRow(int64_t userId) {
+    QSqlQuery q(m_db);
+    q.prepare("SELECT a.user_id, a.username, a.email, a.admin, a.stat_agent, a.banned, "
+              "a.ban_reason, a.ban_timestamp, t.creation, t.last_login "
+              "FROM account a LEFT JOIN account_timestamp t ON t.user_id = a.user_id "
+              "WHERE a.user_id = ?");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    if (!Exec(q) || !q.next())
+        return std::nullopt;
+
+    AdminUserRow r;
+    r.userId = q.value(0).toLongLong();
+    r.username = q.value(1).toString();
+    r.email = q.value(2).toString();
+    r.admin = q.value(3).toBool();
+    r.statAgent = q.value(4).toBool();
+    r.banned = q.value(5).toBool();
+    r.banReason = q.value(6).toString();
+    r.banTimestamp = q.value(7).toLongLong();
+    r.creation = q.value(8).toLongLong();
+    r.lastLogin = q.value(9).toLongLong();
+    return r;
+}
+
+bool Database::AddAuditEntry(int64_t actorUserId, const QString& actorNpid, const QString& action,
+                             int64_t targetUserId, const QString& targetNpid,
+                             const QString& reason) {
+    QSqlQuery q(m_db);
+    q.prepare("INSERT INTO admin_audit(timestamp, actor_user_id, actor_npid, action, "
+              "target_user_id, target_npid, reason) VALUES(?,?,?,?,?,?,?)");
+    q.addBindValue(QDateTime::currentSecsSinceEpoch());
+    q.addBindValue(static_cast<qlonglong>(actorUserId));
+    q.addBindValue(actorNpid);
+    q.addBindValue(action);
+    q.addBindValue(static_cast<qlonglong>(targetUserId));
+    q.addBindValue(targetNpid);
+    q.addBindValue(reason);
     return Exec(q);
+}
+
+QList<AuditRow> Database::ListAudit(int limit, int offset) {
+    QList<AuditRow> rows;
+    if (limit <= 0)
+        return rows;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT id, timestamp, actor_user_id, actor_npid, action, target_user_id, "
+              "target_npid, reason FROM admin_audit ORDER BY id DESC LIMIT ? OFFSET ?");
+    q.addBindValue(limit);
+    q.addBindValue(qMax(0, offset));
+    if (!Exec(q))
+        return rows;
+    while (q.next()) {
+        AuditRow r;
+        r.id = q.value(0).toLongLong();
+        r.timestamp = q.value(1).toLongLong();
+        r.actorUserId = q.value(2).toLongLong();
+        r.actorNpid = q.value(3).toString();
+        r.action = q.value(4).toString();
+        r.targetUserId = q.value(5).toLongLong();
+        r.targetNpid = q.value(6).toString();
+        r.reason = q.value(7).toString();
+        rows.append(r);
+    }
+    return rows;
 }
 
 bool Database::DeleteUser(int64_t userId) {
@@ -555,6 +748,129 @@ bool Database::SetAdmin(int64_t userId, bool admin) {
     q.addBindValue(admin ? 1 : 0);
     q.addBindValue(static_cast<qlonglong>(userId));
     return Exec(q);
+}
+
+void Database::CollectScoreDataIds(int64_t userId, PurgeSummary& summary) {
+    QSqlQuery q(m_db);
+    q.prepare("SELECT data_id FROM score WHERE user_id=? AND data_id IS NOT NULL");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    if (!Exec(q))
+        return;
+    while (q.next()) {
+        const qlonglong id = q.value(0).toLongLong();
+        if (id > 0)
+            summary.scoreDataIds.append(static_cast<uint64_t>(id));
+    }
+}
+
+bool Database::PurgeUserDataStatements(int64_t userId, PurgeSummary& summary) {
+    const qlonglong uid = static_cast<qlonglong>(userId);
+
+    // (sql, bind count, where to record the row count)
+    const struct {
+        const char* sql;
+        int binds;
+        int* counter;
+    } steps[] = {
+        {"DELETE FROM score WHERE user_id=?", 1, &summary.scores},
+        {"DELETE FROM tus_variable WHERE owner_user_id=?", 1, &summary.tusVariables},
+        {"DELETE FROM tus_data WHERE owner_user_id=?", 1, &summary.tusData},
+        {"DELETE FROM friendship WHERE user_id_1=? OR user_id_2=?", 2, &summary.friendships},
+    };
+
+    for (const auto& step : steps) {
+        QSqlQuery q(m_db);
+        if (!q.prepare(QString::fromLatin1(step.sql))) {
+            m_lastError = q.lastError().text();
+            qCritical() << "PurgeUserData: prepare failed:" << m_lastError;
+            return false;
+        }
+        for (int i = 0; i < step.binds; ++i)
+            q.addBindValue(uid);
+        if (!Exec(q)) {
+            qCritical() << "PurgeUserData: delete failed:" << m_lastError;
+            return false;
+        }
+        *step.counter = qMax(0, q.numRowsAffected());
+    }
+    return true;
+}
+
+bool Database::PurgeUserData(int64_t userId, PurgeSummary& summary) {
+    summary = PurgeSummary{};
+
+    // Collect the score blob ids before the rows go away, so the caller can delete
+    // the matching files. Done outside the transaction: it's a read.
+    CollectScoreDataIds(userId, summary);
+
+    if (!m_db.transaction()) {
+        m_lastError = m_db.lastError().text();
+        qCritical() << "PurgeUserData: cannot start transaction:" << m_lastError;
+        return false;
+    }
+    if (!PurgeUserDataStatements(userId, summary)) {
+        m_db.rollback();
+        return false;
+    }
+    if (!m_db.commit()) {
+        m_lastError = m_db.lastError().text();
+        qCritical() << "PurgeUserData: commit failed:" << m_lastError;
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "PurgeUserData: user" << userId << "— scores:" << summary.scores
+            << "tus variables:" << summary.tusVariables << "tus data:" << summary.tusData
+            << "relationships:" << summary.friendships;
+    return true;
+}
+
+bool Database::DeleteAccount(int64_t userId, PurgeSummary& summary) {
+    summary = PurgeSummary{};
+    const qlonglong uid = static_cast<qlonglong>(userId);
+
+    CollectScoreDataIds(userId, summary);
+
+    if (!m_db.transaction()) {
+        m_lastError = m_db.lastError().text();
+        qCritical() << "DeleteAccount: cannot start transaction:" << m_lastError;
+        return false;
+    }
+
+    // Same data sweep as a purge, then the account itself.
+    if (!PurgeUserDataStatements(userId, summary)) {
+        m_db.rollback();
+        return false;
+    }
+
+    for (const char* sql :
+         {"DELETE FROM account_timestamp WHERE user_id=?", "DELETE FROM account WHERE user_id=?"}) {
+        QSqlQuery q(m_db);
+        if (!q.prepare(QString::fromLatin1(sql))) {
+            m_lastError = q.lastError().text();
+            qCritical() << "DeleteAccount: prepare failed:" << m_lastError;
+            m_db.rollback();
+            return false;
+        }
+        q.addBindValue(uid);
+        if (!Exec(q)) {
+            qCritical() << "DeleteAccount: delete failed:" << m_lastError;
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    if (!m_db.commit()) {
+        m_lastError = m_db.lastError().text();
+        qCritical() << "DeleteAccount: commit failed:" << m_lastError;
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "DeleteAccount: removed user" << userId << "— scores:" << summary.scores
+            << "tus variables:" << summary.tusVariables << "tus data:" << summary.tusData
+            << "relationships:" << summary.friendships;
+    return true;
 }
 
 int Database::TotalUsers() {

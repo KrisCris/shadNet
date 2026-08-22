@@ -51,6 +51,27 @@ public:
         return m_matching2Enabled;
     }
 
+    bool IsAdminApiEnabled() const {
+        QReadLocker lk(&m_lock);
+        return m_adminApiEnabled;
+    }
+    QString GetAdminApiHost() const {
+        QReadLocker lk(&m_lock);
+        return m_adminApiHost;
+    }
+    QString GetAdminApiPort() const {
+        QReadLocker lk(&m_lock);
+        return m_adminApiPort;
+    }
+    int GetAdminSessionMinutes() const {
+        QReadLocker lk(&m_lock);
+        return m_adminSessionMinutes;
+    }
+    QStringList GetAdminsList() const {
+        QReadLocker lk(&m_lock);
+        return m_adminsList;
+    }
+
     bool IsEmailValidated() const {
         QReadLocker lk(&m_lock);
         return m_emailValidated;
@@ -108,6 +129,10 @@ private:
     QString m_statsPath = "stats";
     int m_statsCacheLife = 30; // seconds the stats JSON is cached before recompute
     bool m_emailValidated = false;
+    bool m_adminApiEnabled = true;
+    QString m_adminApiHost = "0.0.0.0";
+    QString m_adminApiPort = "31350";
+    int m_adminSessionMinutes = 480;
     QStringList m_adminsList;
     QSet<QString> m_bannedDomains;
     // When non-empty, registrations must supply this key or they are rejected.

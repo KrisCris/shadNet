@@ -5,6 +5,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QLoggingCategory>
+#include "admin_api.h"
 #include "config.h"
 #include "server.h"
 #include "webapi_server.h"
@@ -43,6 +44,16 @@ int main(int argc, char* argv[]) {
     WebApiServer webapi;
     if (!webapi.Start(&config, "db/shadnet.db", &server.Shared())) {
         qWarning() << "WebApiServer failed to start; continuing without WebAPI";
+    }
+
+    // Start the admin API the shadNet admin tool talks to.
+    AdminApiServer adminApi;
+    if (config.IsAdminApiEnabled()) {
+        if (!adminApi.Start(&config, "db/shadnet.db", &server.Shared())) {
+            qWarning() << "AdminApiServer failed to start; continuing without admin API";
+        }
+    } else {
+        qInfo() << "Admin API disabled (AdminApiEnabled=false)";
     }
 
     return app.exec();

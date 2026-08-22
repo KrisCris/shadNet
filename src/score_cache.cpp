@@ -221,6 +221,32 @@ std::pair<bool, uint64_t> ScoreCache::GetGameDataId(const QString& comId, uint32
     return {true, *e.dataId};
 }
 
+int ScoreCache::RemoveUser(int64_t userId) {
+    QWriteLocker lk(&m_lock);
+    int removed = 0;
+    for (auto comIt = m_tables.begin(); comIt != m_tables.end(); ++comIt) {
+        for (auto boardIt = comIt->begin(); boardIt != comIt->end(); ++boardIt) {
+            ScoreTableCache& t = boardIt.value();
+            if (!t.lookup.contains(userId))
+                continue;
+
+            const int before = t.sorted.size();
+            t.sorted.erase(
+                std::remove_if(t.sorted.begin(), t.sorted.end(),
+                               [userId](const ScoreEntry& e) { return e.userId == userId; }),
+                t.sorted.end());
+            removed += before - t.sorted.size();
+
+            // Ranks shift for everyone below a removed row, so rebuild the whole
+            // index rather than patching from a single position.
+            t.lookup.clear();
+            for (int i = 0; i < t.sorted.size(); ++i)
+                t.lookup[t.sorted[i].userId][t.sorted[i].characterId] = i;
+        }
+    }
+    return removed;
+}
+
 QVector<QString> ScoreCache::ListComIds() const {
     QReadLocker lk(&m_lock);
     QVector<QString> out;

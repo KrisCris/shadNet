@@ -55,6 +55,10 @@ void ConfigManager::Parse(const QString& path) {
     m_statsPath = str("StatsPath", "stats");
     m_statsCacheLife = str("StatsCacheLife", "30").toInt();
     m_emailValidated = boolean("EmailValidated", false);
+    m_adminApiEnabled = boolean("AdminApiEnabled", true);
+    m_adminApiHost = str("AdminApiHost", "127.0.0.1");
+    m_adminApiPort = str("AdminApiPort", "31350");
+    m_adminSessionMinutes = str("AdminSessionMinutes", "480").toInt();
     m_adminsList = strList("AdminsList");
     m_registrationSecretKey = str("RegistrationSecretKey", "");
 

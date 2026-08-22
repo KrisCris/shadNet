@@ -85,6 +85,9 @@ set(SOURCES
     # Read-only stats HTTP/JSON listener
     src/stats_server.h
     src/stats_server.cpp
+    # Admin HTTP/JSON listener
+    src/admin_api.h
+    src/admin_api.cpp
     # TUS
     src/cmd_tus.cpp
     src/tus_db.cpp

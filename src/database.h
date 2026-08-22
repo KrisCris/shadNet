@@ -46,6 +46,54 @@ struct UserRecord {
     bool banned = false;
 };
 
+// ── Admin tooling
+struct AdminUserRow {
+    int64_t userId = 0;
+    QString username;
+    QString email;
+    bool admin = false;
+    bool statAgent = false;
+    bool banned = false;
+    QString banReason;
+    int64_t banTimestamp = 0; // seconds since epoch, 0 when never banned
+    int64_t creation = 0;     // seconds since epoch, 0 when unknown
+    int64_t lastLogin = 0;    // seconds since epoch, 0 when never logged in
+};
+
+// Which accounts ListUsers/CountUsers should return.
+enum class UserFilter {
+    All,
+    BannedOnly,
+    AdminsOnly,
+    ActiveOnly, // not banned
+};
+
+// One entry of the admin action log.
+struct AuditRow {
+    int64_t id = 0;
+    int64_t timestamp = 0;
+    int64_t actorUserId = 0;
+    QString actorNpid;
+    QString action;
+    int64_t targetUserId = 0;
+    QString targetNpid;
+    QString reason;
+};
+
+// What a PurgeUserData call removed.
+struct PurgeSummary {
+    int scores = 0;
+    int tusVariables = 0;
+    int tusData = 0;
+    int friendships = 0;
+    // data_id of every score blob that belonged to the purged rows.
+    QList<uint64_t> scoreDataIds;
+
+    int total() const {
+        return scores + tusVariables + tusData + friendships;
+    }
+};
+
 enum class DbError {
     None = 0,         // No error (success)
     ExistingUsername, // Username already exists
@@ -81,13 +129,30 @@ public:
     std::optional<int64_t> GetAccountCreationTime(int64_t userId);
     QList<QPair<int64_t, QString>> GetUsernamesFromIds(const QSet<int64_t>& ids);
     bool UpdateLoginTime(int64_t userId);
-    bool BanUser(int64_t userId, bool ban);
+    // Sets/clears the ban flag.
+    bool BanUser(int64_t userId, bool ban, const QString& reason = QString());
     bool DeleteUser(int64_t userId);
+
+    // Removes the account row itself along with everything PurgeUserData covers
+    bool DeleteAccount(int64_t userId, PurgeSummary& summary);
     bool SetAdmin(int64_t userId, bool admin);
     int TotalUsers();
+
+    // Deletes everything this account produced: leaderboard scores, TUS variable
+    // and data slots, and friend/block relationships.
+    bool PurgeUserData(int64_t userId, PurgeSummary& summary);
+
+    QList<AdminUserRow> ListUsers(const QString& search, UserFilter filter, int limit, int offset);
+    int CountUsers(const QString& search, UserFilter filter);
+    std::optional<AdminUserRow> GetUserRow(int64_t userId);
+    int CountUsersWhere(UserFilter filter);
+
+    // Append an entry to the admin action log. Returns false only on a DB error.
+    bool AddAuditEntry(int64_t actorUserId, const QString& actorNpid, const QString& action,
+                       int64_t targetUserId, const QString& targetNpid, const QString& reason);
+    QList<AuditRow> ListAudit(int limit, int offset);
+
     void CleanNeverUsedAccounts();
-    // Maintenance: purge score rows recorded with an empty NP communication id
-    // (left behind when GetNpCommId had no trophy/com id and returned blanks).
     void RunMaintenance();
 
     // Friendship
@@ -119,6 +184,11 @@ public:
 private:
     bool Exec(const QString& sql);
     bool Exec(QSqlQuery& q);
+    bool HasMigration(int id);
+    bool PurgeUserDataStatements(int64_t userId, PurgeSummary& summary);
+    void CollectScoreDataIds(int64_t userId, PurgeSummary& summary);
+    static QString BuildUserFilterClause(const QString& search, UserFilter filter);
+    static void BindUserFilter(QSqlQuery& q, const QString& search);
     QByteArray HashPassword(const QString& password, const QByteArray& salt);
     QByteArray GenerateSalt(int bytes = 64);
     QString GenerateToken(int len = 16);

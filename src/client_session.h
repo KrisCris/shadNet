@@ -35,6 +35,8 @@ struct SharedState {
         QString npid;
         std::function<void(QByteArray)> send;
         std::function<void(uint64_t)> resetMatchingRoomState;
+        // Force-closes this session's socket.
+        std::function<void()> disconnect;
         // Online friends for this session
         // Protected by clientsLock (same lock as the outer clients map).
         QHash<int64_t, QString> friends;

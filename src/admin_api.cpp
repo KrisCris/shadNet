@@ -1,0 +1,715 @@
+// SPDX-FileCopyrightText: Copyright 2026 shadNet Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+#include "admin_api.h"
+
+#include <QByteArray>
+#include <QDebug>
+#include <QHostAddress>
+#include <QHttpServerRequest>
+#include <QHttpServerResponder>
+#include <QHttpServerResponse>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QRandomGenerator>
+#include <QReadWriteLock>
+#include <QStringList>
+#include <QUrlQuery>
+
+#include "client_session.h" // SharedState
+#include "score_cache.h"
+#include "score_files.h"
+
+namespace {
+
+// Error codes returned in the JSON body.
+constexpr int ERR_BAD_REQUEST = 4000;
+constexpr int ERR_INVALID_CREDENTIALS = 4010;
+constexpr int ERR_MISSING_TOKEN = 4011;
+constexpr int ERR_INVALID_TOKEN = 4012;
+constexpr int ERR_NOT_ADMIN = 4030;
+constexpr int ERR_FORBIDDEN_TARGET = 4031;
+constexpr int ERR_NOT_FOUND = 4040;
+constexpr int ERR_TOO_MANY_ATTEMPTS = 4290;
+constexpr int ERR_INTERNAL = 5000;
+
+// Brute-force protection on POST /admin/v1/login.
+constexpr int kMaxLoginFailures = 5;
+constexpr int kLoginBlockSeconds = 300;
+
+QHttpServerResponse JsonError(QHttpServerResponse::StatusCode status, int code,
+                              const QString& message) {
+    QJsonObject err;
+    err.insert(QStringLiteral("code"), code);
+    err.insert(QStringLiteral("message"), message);
+    QJsonObject body;
+    body.insert(QStringLiteral("error"), err);
+    return QHttpServerResponse{"application/json",
+                               QJsonDocument(body).toJson(QJsonDocument::Compact), status};
+}
+
+QHttpServerResponse JsonOk(const QJsonObject& body) {
+    return QHttpServerResponse{"application/json",
+                               QJsonDocument(body).toJson(QJsonDocument::Compact),
+                               QHttpServerResponse::StatusCode::Ok};
+}
+
+std::optional<QJsonObject> ParseJsonBody(const QHttpServerRequest& req, QString& error) {
+    QJsonParseError perr{};
+    const QJsonDocument doc = QJsonDocument::fromJson(req.body(), &perr);
+    if (perr.error != QJsonParseError::NoError) {
+        error = QStringLiteral("Body is not valid JSON: %1").arg(perr.errorString());
+        return std::nullopt;
+    }
+    if (!doc.isObject()) {
+        error = QStringLiteral("Body must be a JSON object");
+        return std::nullopt;
+    }
+    return doc.object();
+}
+
+UserFilter ParseFilter(const QString& raw) {
+    if (raw.compare(QStringLiteral("banned"), Qt::CaseInsensitive) == 0)
+        return UserFilter::BannedOnly;
+    if (raw.compare(QStringLiteral("admins"), Qt::CaseInsensitive) == 0)
+        return UserFilter::AdminsOnly;
+    if (raw.compare(QStringLiteral("active"), Qt::CaseInsensitive) == 0)
+        return UserFilter::ActiveOnly;
+    return UserFilter::All;
+}
+
+QString PeerKey(const QHttpServerRequest& req) {
+    const QHostAddress addr = req.remoteAddress();
+    return addr.isNull() ? QStringLiteral("unknown") : addr.toString();
+}
+
+} // namespace
+
+AdminApiServer::AdminApiServer(QObject* parent) : QObject(parent) {}
+AdminApiServer::~AdminApiServer() = default;
+
+bool AdminApiServer::Start(ConfigManager* config, const QString& dbPath, SharedState* shared) {
+    m_config = config;
+    m_shared = shared;
+    m_sessionMinutes = qMax(5, config->GetAdminSessionMinutes());
+
+    m_db = std::make_unique<Database>(QStringLiteral("admin_api"));
+    if (!m_db->Open(dbPath)) {
+        qCritical() << "AdminApiServer: failed to open database at" << dbPath;
+        return false;
+    }
+
+    const int promoted = SyncConfigAdmins();
+    if (promoted > 0)
+        qInfo() << "AdminApiServer: promoted" << promoted << "account(s) from AdminsList";
+
+    if (m_db->CountUsersWhere(UserFilter::AdminsOnly) == 0) {
+        qWarning() << "AdminApiServer: no account has admin rights yet. Add npids to "
+                      "AdminsList in shadnet.cfg and restart to grant access.";
+    }
+
+    m_http = std::make_unique<QHttpServer>(this);
+    RegisterRoutes();
+
+    m_tcp = std::make_unique<QTcpServer>(this);
+    const QString host = m_config->GetAdminApiHost();
+    const quint16 port = m_config->GetAdminApiPort().toUShort();
+    if (!m_tcp->listen(QHostAddress(host), port)) {
+        qCritical() << "AdminApiServer: failed to bind" << host << ":" << port << "—"
+                    << m_tcp->errorString();
+        return false;
+    }
+    if (!m_http->bind(m_tcp.get())) {
+        qCritical() << "AdminApiServer: QHttpServer failed to attach to listener";
+        return false;
+    }
+
+    qInfo().nospace().noquote() << "AdminApiServer listening on: " << host << ":" << port;
+    if (host != QStringLiteral("127.0.0.1") && host != QStringLiteral("::1")) {
+        qWarning() << "AdminApiServer is reachable beyond localhost. Traffic is plain HTTP, so "
+                      "put it behind a TLS reverse proxy or a VPN.";
+    }
+    return true;
+}
+
+int AdminApiServer::SyncConfigAdmins() {
+    int promoted = 0;
+    const QStringList admins = m_config->GetAdminsList();
+    for (const QString& npid : admins) {
+        const QString trimmed = npid.trimmed();
+        if (trimmed.isEmpty())
+            continue;
+        const auto uid = m_db->GetUserId(trimmed);
+        if (!uid) {
+            qWarning() << "AdminsList names an account that does not exist:" << trimmed;
+            continue;
+        }
+        const auto row = m_db->GetUserRow(*uid);
+        if (row && row->admin)
+            continue; // already an admin, nothing to do
+        if (m_db->SetAdmin(*uid, true)) {
+            qInfo() << "Granted admin to" << trimmed;
+            m_db->AddAuditEntry(0, QStringLiteral("config"), QStringLiteral("grant_admin"), *uid,
+                                trimmed, QStringLiteral("Listed in AdminsList"));
+            ++promoted;
+        }
+    }
+    return promoted;
+}
+
+// Auth
+
+QString AdminApiServer::MintToken(int64_t userId, const QString& npid) {
+    static const QString chars = QStringLiteral("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                                                "abcdefghijklmnopqrstuvwxyz"
+                                                "0123456789");
+    QString token;
+    token.reserve(48);
+    QRandomGenerator* gen = QRandomGenerator::system();
+    for (int i = 0; i < 48; ++i)
+        token.append(chars.at(gen->bounded(chars.size())));
+
+    AdminSession s;
+    s.userId = userId;
+    s.npid = npid;
+    s.expiresAt = QDateTime::currentDateTimeUtc().addSecs(m_sessionMinutes * 60);
+
+    QMutexLocker lk(&m_sessionsMutex);
+    m_sessions.insert(token, s);
+    return token;
+}
+
+void AdminApiServer::PurgeExpiredSessions() {
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    QMutexLocker lk(&m_sessionsMutex);
+    for (auto it = m_sessions.begin(); it != m_sessions.end();) {
+        if (it->expiresAt <= now)
+            it = m_sessions.erase(it);
+        else
+            ++it;
+    }
+}
+
+std::optional<AdminApiServer::AdminSession> AdminApiServer::Authenticate(
+    const QHttpServerRequest& req) {
+    const QByteArray rawAuth = req.value("Authorization");
+    if (rawAuth.isEmpty())
+        return std::nullopt;
+
+    const QString authStr = QString::fromUtf8(rawAuth).trimmed();
+    static const QString prefix = QStringLiteral("Bearer ");
+    if (!authStr.startsWith(prefix, Qt::CaseInsensitive))
+        return std::nullopt;
+    const QString token = authStr.mid(prefix.size()).trimmed();
+    if (token.isEmpty())
+        return std::nullopt;
+
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    QMutexLocker lk(&m_sessionsMutex);
+    auto it = m_sessions.find(token);
+    if (it == m_sessions.end())
+        return std::nullopt;
+    if (it->expiresAt <= now) {
+        m_sessions.erase(it);
+        return std::nullopt;
+    }
+    // Sliding expiry: an admin actively using the tool stays logged in.
+    it->expiresAt = now.addSecs(m_sessionMinutes * 60);
+    return *it;
+}
+
+QHttpServerResponse AdminApiServer::AuthError(const QHttpServerRequest& req) const {
+    const QString authStr = QString::fromUtf8(req.value("Authorization")).trimmed();
+    if (authStr.isEmpty()) {
+        return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_MISSING_TOKEN,
+                         QStringLiteral("This endpoint needs an admin token. Sign in at "
+                                        "/admin/v1/login and send it as an Authorization: "
+                                        "Bearer header."));
+    }
+    return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_INVALID_TOKEN,
+                     QStringLiteral("Your session is no longer valid. Sign in again."));
+}
+
+bool AdminApiServer::IsThrottled(const QString& peer, int& retryAfterSecs) {
+    QMutexLocker lk(&m_sessionsMutex);
+    auto it = m_throttle.find(peer);
+    if (it == m_throttle.end() || it->blockedUntil.isNull())
+        return false;
+    const QDateTime now = QDateTime::currentDateTimeUtc();
+    if (it->blockedUntil <= now) {
+        m_throttle.erase(it);
+        return false;
+    }
+    retryAfterSecs = static_cast<int>(now.secsTo(it->blockedUntil));
+    return true;
+}
+
+void AdminApiServer::NoteLoginFailure(const QString& peer) {
+    QMutexLocker lk(&m_sessionsMutex);
+    LoginThrottle& t = m_throttle[peer];
+    if (++t.failures >= kMaxLoginFailures) {
+        t.blockedUntil = QDateTime::currentDateTimeUtc().addSecs(kLoginBlockSeconds);
+        t.failures = 0;
+    }
+}
+
+void AdminApiServer::ClearLoginFailures(const QString& peer) {
+    QMutexLocker lk(&m_sessionsMutex);
+    m_throttle.remove(peer);
+}
+
+// Live session helpers
+
+bool AdminApiServer::IsOnline(int64_t userId) const {
+    if (!m_shared)
+        return false;
+    QReadLocker lk(&m_shared->clientsLock);
+    return m_shared->clients.contains(userId);
+}
+
+bool AdminApiServer::KickUser(int64_t userId) {
+    if (!m_shared)
+        return false;
+    std::function<void()> drop;
+    {
+        QReadLocker lk(&m_shared->clientsLock);
+        const auto it = m_shared->clients.constFind(userId);
+        if (it == m_shared->clients.constEnd() || !it->disconnect)
+            return false;
+        drop = it->disconnect;
+    }
+    // Called with the lock released: the session's own teardown takes the write lock.
+    drop();
+    return true;
+}
+
+void AdminApiServer::CleanUpAfterDataRemoval(int64_t userId, const PurgeSummary& summary,
+                                             int& cachedScoresDropped, int& blobsDeleted) {
+    cachedScoresDropped = 0;
+    blobsDeleted = 0;
+
+    // The score blobs live on disk, not in SQLite, so they need a separate sweep.
+    if (m_shared && m_shared->scoreFiles) {
+        for (uint64_t dataId : summary.scoreDataIds) {
+            m_shared->scoreFiles->Remove(dataId);
+            ++blobsDeleted;
+        }
+    } else if (!summary.scoreDataIds.isEmpty()) {
+        qWarning() << "AdminApi: removed" << summary.scoreDataIds.size()
+                   << "score blob row(s) but no ScoreFiles is available; the .sdt files "
+                      "are now orphaned and will be swept on the next restart.";
+    }
+
+    if (m_shared && m_shared->scoreCache)
+        cachedScoresDropped = m_shared->scoreCache->RemoveUser(userId);
+}
+
+bool AdminApiServer::PurgeUserData(int64_t userId, PurgeSummary& summary, int& cachedScoresDropped,
+                                   int& blobsDeleted) {
+    if (!m_db->PurgeUserData(userId, summary))
+        return false;
+    CleanUpAfterDataRemoval(userId, summary, cachedScoresDropped, blobsDeleted);
+    return true;
+}
+
+bool AdminApiServer::DeleteAccount(int64_t userId, PurgeSummary& summary, int& cachedScoresDropped,
+                                   int& blobsDeleted) {
+    if (!m_db->DeleteAccount(userId, summary))
+        return false;
+    CleanUpAfterDataRemoval(userId, summary, cachedScoresDropped, blobsDeleted);
+    return true;
+}
+
+QJsonObject AdminApiServer::UserRowToJson(const AdminUserRow& row) const {
+    QJsonObject o;
+    o.insert(QStringLiteral("userId"), static_cast<qint64>(row.userId));
+    o.insert(QStringLiteral("npid"), row.username);
+    o.insert(QStringLiteral("email"), row.email);
+    o.insert(QStringLiteral("admin"), row.admin);
+    o.insert(QStringLiteral("statAgent"), row.statAgent);
+    o.insert(QStringLiteral("banned"), row.banned);
+    o.insert(QStringLiteral("banReason"), row.banReason);
+    o.insert(QStringLiteral("banTimestamp"), static_cast<qint64>(row.banTimestamp));
+    o.insert(QStringLiteral("creation"), static_cast<qint64>(row.creation));
+    o.insert(QStringLiteral("lastLogin"), static_cast<qint64>(row.lastLogin));
+    o.insert(QStringLiteral("online"), IsOnline(row.userId));
+    return o;
+}
+
+// Routes
+
+void AdminApiServer::RegisterRoutes() {
+    // Unauthenticated reachability probe, so the tool can tell "wrong address"
+    // apart from "wrong password" before anyone types a credential.
+    m_http->route("/admin/v1/status", QHttpServerRequest::Method::Get,
+                  [](const QHttpServerRequest&) {
+                      QJsonObject body;
+                      body.insert(QStringLiteral("ok"), true);
+                      body.insert(QStringLiteral("service"), QStringLiteral("shadnet-admin"));
+                      body.insert(QStringLiteral("apiVersion"), 1);
+                      return JsonOk(body);
+                  });
+
+    // POST /admin/v1/login — { npid, password } -> { token, expiresInSeconds, ... }
+    m_http->route(
+        "/admin/v1/login", QHttpServerRequest::Method::Post,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            const QString peer = PeerKey(req);
+            int retryAfter = 0;
+            if (IsThrottled(peer, retryAfter)) {
+                return JsonError(
+                    QHttpServerResponse::StatusCode::TooManyRequests, ERR_TOO_MANY_ATTEMPTS,
+                    QStringLiteral("Too many failed sign-ins. Try again in %1 seconds.")
+                        .arg(retryAfter));
+            }
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+            }
+            const QString npid = bodyOpt->value(QStringLiteral("npid")).toString();
+            const QString password = bodyOpt->value(QStringLiteral("password")).toString();
+            if (npid.isEmpty() || password.isEmpty()) {
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("Enter both an npid and a password."));
+            }
+
+            const auto user = m_db->CheckUser(npid, password, QString(), /*checkToken=*/false);
+            if (!user) {
+                NoteLoginFailure(peer);
+                qWarning() << "AdminApi: failed sign-in for" << npid << "from" << peer;
+                // Same message for unknown npid and wrong password: don't confirm
+                // which accounts exist.
+                return JsonError(QHttpServerResponse::StatusCode::Unauthorized,
+                                 ERR_INVALID_CREDENTIALS,
+                                 QStringLiteral("That npid and password don't match an account."));
+            }
+            if (user->banned) {
+                NoteLoginFailure(peer);
+                return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_NOT_ADMIN,
+                                 QStringLiteral("This account is banned."));
+            }
+            if (!user->admin) {
+                NoteLoginFailure(peer);
+                qWarning() << "AdminApi: non-admin" << npid << "tried to sign in from" << peer;
+                return JsonError(
+                    QHttpServerResponse::StatusCode::Forbidden, ERR_NOT_ADMIN,
+                    QStringLiteral("This account doesn't have admin rights. Ask a server operator "
+                                   "to add it to AdminsList in shadnet.cfg."));
+            }
+
+            ClearLoginFailures(peer);
+            PurgeExpiredSessions();
+            const QString token = MintToken(user->userId, user->username);
+            qInfo() << "AdminApi: signed in" << user->username << "from" << peer;
+
+            QJsonObject body;
+            body.insert(QStringLiteral("token"), token);
+            body.insert(QStringLiteral("expiresInSeconds"), m_sessionMinutes * 60);
+            body.insert(QStringLiteral("userId"), static_cast<qint64>(user->userId));
+            body.insert(QStringLiteral("npid"), user->username);
+            return JsonOk(body);
+        });
+
+    // POST /admin/v1/logout — revokes the presented token.
+    m_http->route("/admin/v1/logout", QHttpServerRequest::Method::Post,
+                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const QByteArray rawAuth = req.value("Authorization");
+                      const QString authStr = QString::fromUtf8(rawAuth).trimmed();
+                      if (authStr.startsWith(QStringLiteral("Bearer "), Qt::CaseInsensitive)) {
+                          QMutexLocker lk(&m_sessionsMutex);
+                          m_sessions.remove(authStr.mid(7).trimmed());
+                      }
+                      QJsonObject body;
+                      body.insert(QStringLiteral("ok"), true);
+                      return JsonOk(body);
+                  });
+
+    // GET /admin/v1/me — who the current token belongs to.
+    m_http->route("/admin/v1/me", QHttpServerRequest::Method::Get,
+                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+                      QJsonObject body;
+                      body.insert(QStringLiteral("userId"), static_cast<qint64>(session->userId));
+                      body.insert(QStringLiteral("npid"), session->npid);
+                      return JsonOk(body);
+                  });
+
+    // GET /admin/v1/overview — counts for the tool's status bar.
+    m_http->route("/admin/v1/overview", QHttpServerRequest::Method::Get,
+                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+
+                      int online = 0;
+                      if (m_shared) {
+                          QReadLocker lk(&m_shared->usageLock);
+                          online = m_shared->usageTotalOnline;
+                      }
+                      QJsonObject body;
+                      body.insert(QStringLiteral("totalUsers"), m_db->TotalUsers());
+                      body.insert(QStringLiteral("bannedUsers"),
+                                  m_db->CountUsersWhere(UserFilter::BannedOnly));
+                      body.insert(QStringLiteral("adminUsers"),
+                                  m_db->CountUsersWhere(UserFilter::AdminsOnly));
+                      body.insert(QStringLiteral("onlineUsers"), online);
+                      return JsonOk(body);
+                  });
+
+    // GET /admin/v1/users?search=&filter=&limit=&offset=
+    m_http->route("/admin/v1/users", QHttpServerRequest::Method::Get,
+                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+
+                      const QUrlQuery query(req.url());
+                      const QString search =
+                          query.queryItemValue(QStringLiteral("search")).trimmed();
+                      const UserFilter filter =
+                          ParseFilter(query.queryItemValue(QStringLiteral("filter")));
+
+                      bool ok = false;
+                      int limit = query.queryItemValue(QStringLiteral("limit")).toInt(&ok);
+                      if (!ok)
+                          limit = 100;
+                      limit = qBound(1, limit, 500);
+                      int offset = query.queryItemValue(QStringLiteral("offset")).toInt(&ok);
+                      if (!ok || offset < 0)
+                          offset = 0;
+
+                      QJsonArray users;
+                      const auto rows = m_db->ListUsers(search, filter, limit, offset);
+                      for (const AdminUserRow& row : rows)
+                          users.append(UserRowToJson(row));
+
+                      QJsonObject body;
+                      body.insert(QStringLiteral("users"), users);
+                      body.insert(QStringLiteral("total"), m_db->CountUsers(search, filter));
+                      body.insert(QStringLiteral("limit"), limit);
+                      body.insert(QStringLiteral("offset"), offset);
+                      return JsonOk(body);
+                  });
+
+    // GET /admin/v1/users/<id>
+    m_http->route("/admin/v1/users/<arg>", QHttpServerRequest::Method::Get,
+                  [this](qint64 userId, const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+                      const auto row = m_db->GetUserRow(userId);
+                      if (!row)
+                          return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                           QStringLiteral("No account has id %1.").arg(userId));
+                      return JsonOk(UserRowToJson(*row));
+                  });
+
+    // POST /admin/v1/users/<id>/ban — { banned: bool, reason?: string }
+    m_http->route(
+        "/admin/v1/users/<arg>/ban", QHttpServerRequest::Method::Post,
+        [this](qint64 userId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+            if (!bodyOpt->contains(QStringLiteral("banned")))
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("Body must set \"banned\" to true or false."));
+
+            const bool banned = bodyOpt->value(QStringLiteral("banned")).toBool();
+            const QString reason =
+                bodyOpt->value(QStringLiteral("reason")).toString().trimmed().left(500);
+
+            const auto target = m_db->GetUserRow(userId);
+            if (!target)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No account has id %1.").arg(userId));
+
+            // Two guards that keep the server administrable: an admin can't lock
+            // themselves out, and admins can't ban each other. Demote first (via
+            // AdminsList + restart, or directly in the DB) if you need to ban one.
+            if (target->userId == session->userId)
+                return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_FORBIDDEN_TARGET,
+                                 QStringLiteral("You can't ban your own account."));
+            if (target->admin && banned)
+                return JsonError(
+                    QHttpServerResponse::StatusCode::Forbidden, ERR_FORBIDDEN_TARGET,
+                    QStringLiteral("%1 is an admin. Remove their admin rights before banning them.")
+                        .arg(target->username));
+
+            if (!m_db->BanUser(target->userId, banned, reason)) {
+                qCritical() << "AdminApi: ban update failed for" << target->username << ":"
+                            << m_db->lastError();
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The database rejected the change. "
+                                                "Check the server log."));
+            }
+
+            // A ban only bites at the next login unless the live session is dropped.
+            const bool kicked = banned ? KickUser(target->userId) : false;
+
+            m_db->AddAuditEntry(session->userId, session->npid,
+                                banned ? QStringLiteral("ban") : QStringLiteral("unban"),
+                                target->userId, target->username, reason);
+
+            qInfo().nospace().noquote()
+                << "AdminApi: " << session->npid << (banned ? " banned " : " unbanned ")
+                << target->username << (kicked ? " (session closed)" : "")
+                << (reason.isEmpty() ? QString() : QStringLiteral(" — ") + reason);
+
+            const auto updated = m_db->GetUserRow(target->userId);
+            QJsonObject body;
+            body.insert(QStringLiteral("user"),
+                        updated ? UserRowToJson(*updated) : UserRowToJson(*target));
+            body.insert(QStringLiteral("kicked"), kicked);
+            return JsonOk(body);
+        });
+
+    // DELETE /admin/v1/users/<id> — removes the account and everything it produced.
+    // Separate from ban on purpose: a ban is reversible and leaves the data alone,
+    // this is neither.
+    m_http->route(
+        "/admin/v1/users/<arg>", QHttpServerRequest::Method::Delete,
+        [this](qint64 userId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+
+            // A reason is optional here; an empty body is fine.
+            QString reason;
+            if (!req.body().trimmed().isEmpty()) {
+                QString parseError;
+                const auto bodyOpt = ParseJsonBody(req, parseError);
+                if (!bodyOpt)
+                    return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                     parseError);
+                reason = bodyOpt->value(QStringLiteral("reason")).toString().trimmed().left(500);
+            }
+
+            const auto target = m_db->GetUserRow(userId);
+            if (!target)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No account has id %1.").arg(userId));
+
+            // The same two guards as banning, for the same reason — and they matter
+            // more here, because this one can't be undone.
+            if (target->userId == session->userId)
+                return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_FORBIDDEN_TARGET,
+                                 QStringLiteral("You can't delete your own account."));
+            if (target->admin)
+                return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_FORBIDDEN_TARGET,
+                                 QStringLiteral("%1 is an admin. Remove their admin rights "
+                                                "before deleting the account.")
+                                     .arg(target->username));
+
+            // Close the session first: once the account row is gone the user is
+            // still holding an authenticated connection with no account behind it.
+            const bool kicked = KickUser(target->userId);
+
+            PurgeSummary summary;
+            int cachedScoresDropped = 0;
+            int blobsDeleted = 0;
+            if (!DeleteAccount(target->userId, summary, cachedScoresDropped, blobsDeleted)) {
+                qCritical() << "AdminApi: deleting" << target->username
+                            << "failed:" << m_db->lastError();
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The database rejected the deletion, so nothing "
+                                                "was removed. Check the server log."));
+            }
+
+            // The audit row outlives the account it refers to, which is the point:
+            // it is the only remaining record that this npid ever existed.
+            m_db->AddAuditEntry(
+                session->userId, session->npid, QStringLiteral("delete_account"), target->userId,
+                target->username,
+                QStringLiteral("scores=%1 tusVariables=%2 tusData=%3 relationships=%4 "
+                               "scoreBlobs=%5%6")
+                    .arg(summary.scores)
+                    .arg(summary.tusVariables)
+                    .arg(summary.tusData)
+                    .arg(summary.friendships)
+                    .arg(blobsDeleted)
+                    .arg(reason.isEmpty() ? QString() : QStringLiteral(" — ") + reason));
+
+            qInfo().nospace().noquote()
+                << "AdminApi: " << session->npid << " deleted account " << target->username
+                << (kicked ? " (session closed)" : "")
+                << (reason.isEmpty() ? QString() : QStringLiteral(" — ") + reason);
+
+            QJsonObject removed;
+            removed.insert(QStringLiteral("scores"), summary.scores);
+            removed.insert(QStringLiteral("scoreBlobs"), blobsDeleted);
+            removed.insert(QStringLiteral("tusVariables"), summary.tusVariables);
+            removed.insert(QStringLiteral("tusData"), summary.tusData);
+            removed.insert(QStringLiteral("relationships"), summary.friendships);
+            removed.insert(QStringLiteral("cachedScoresDropped"), cachedScoresDropped);
+            removed.insert(QStringLiteral("total"), summary.total());
+
+            QJsonObject body;
+            body.insert(QStringLiteral("deleted"), true);
+            body.insert(QStringLiteral("userId"), static_cast<qint64>(target->userId));
+            body.insert(QStringLiteral("npid"), target->username);
+            body.insert(QStringLiteral("kicked"), kicked);
+            body.insert(QStringLiteral("removed"), removed);
+            return JsonOk(body);
+        });
+
+    // GET /admin/v1/audit?limit=&offset= — who did what, most recent first.
+    m_http->route("/admin/v1/audit", QHttpServerRequest::Method::Get,
+                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+
+                      const QUrlQuery query(req.url());
+                      bool ok = false;
+                      int limit = query.queryItemValue(QStringLiteral("limit")).toInt(&ok);
+                      if (!ok)
+                          limit = 100;
+                      limit = qBound(1, limit, 500);
+                      int offset = query.queryItemValue(QStringLiteral("offset")).toInt(&ok);
+                      if (!ok || offset < 0)
+                          offset = 0;
+
+                      QJsonArray entries;
+                      for (const AuditRow& row : m_db->ListAudit(limit, offset)) {
+                          QJsonObject o;
+                          o.insert(QStringLiteral("id"), static_cast<qint64>(row.id));
+                          o.insert(QStringLiteral("timestamp"), static_cast<qint64>(row.timestamp));
+                          o.insert(QStringLiteral("actorNpid"), row.actorNpid);
+                          o.insert(QStringLiteral("action"), row.action);
+                          o.insert(QStringLiteral("targetNpid"), row.targetNpid);
+                          o.insert(QStringLiteral("targetUserId"),
+                                   static_cast<qint64>(row.targetUserId));
+                          o.insert(QStringLiteral("reason"), row.reason);
+                          entries.append(o);
+                      }
+                      QJsonObject body;
+                      body.insert(QStringLiteral("entries"), entries);
+                      return JsonOk(body);
+                  });
+
+    m_http->setMissingHandler(
+        this, [](const QHttpServerRequest& req, QHttpServerResponder& responder) {
+            qWarning() << "AdminApi: unhandled" << req.method() << req.url().path();
+            QJsonObject err;
+            err.insert(QStringLiteral("code"), ERR_NOT_FOUND);
+            err.insert(QStringLiteral("message"), QStringLiteral("No such admin endpoint."));
+            QJsonObject body;
+            body.insert(QStringLiteral("error"), err);
+            responder.sendResponse(QHttpServerResponse{
+                "application/json", QJsonDocument(body).toJson(QJsonDocument::Compact),
+                QHttpServerResponder::StatusCode::NotFound});
+        });
+}

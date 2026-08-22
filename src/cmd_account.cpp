@@ -159,6 +159,9 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
             QMetaObject::invokeMethod(
                 this, [this, roomId]() { ResetMatchingRoomState(roomId); }, Qt::QueuedConnection);
         };
+        entry.disconnect = [this]() {
+            QMetaObject::invokeMethod(m_socket, "disconnectFromHost", Qt::QueuedConnection);
+        };
         for (const auto& [friendId, friendNpid] : rels.friends) {
             entry.friends.insert(friendId, friendNpid);
             auto it = m_shared->clients.find(friendId);

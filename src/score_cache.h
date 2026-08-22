@@ -46,6 +46,10 @@ public:
     std::pair<bool, uint64_t> GetGameDataId(const QString& comId, uint32_t boardId, int64_t userId,
                                             int32_t charId);
 
+    // Drops every cached entry belonging to a user, across all boards, and returns
+    // how many were removed.
+    int RemoveUser(int64_t userId);
+
     // Read-only enumeration for the stats server: which com_ids / boards are loaded.
     QVector<QString> ListComIds() const;
     QVector<uint32_t> ListBoards(const QString& comId) const;
