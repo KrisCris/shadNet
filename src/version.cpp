@@ -8,7 +8,7 @@
 
 namespace {
 
-constexpr const char* Version = "0.0.15";
+constexpr const char* m_version = "0.0.15";
 
 QString IsoBuildDate() {
     static const QStringList months = {
@@ -37,7 +37,7 @@ QString IsoBuildDate() {
 namespace ShadNet {
 
 QString Version() {
-    return QString::fromLatin1(Version);
+    return QString::fromLatin1(m_version);
 }
 
 QString BuildDate() {
