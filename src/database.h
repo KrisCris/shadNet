@@ -131,7 +131,6 @@ public:
     bool UpdateLoginTime(int64_t userId);
     // Sets/clears the ban flag.
     bool BanUser(int64_t userId, bool ban, const QString& reason = QString());
-    bool DeleteUser(int64_t userId);
 
     // Removes the account row itself along with everything PurgeUserData covers
     bool DeleteAccount(int64_t userId, PurgeSummary& summary);

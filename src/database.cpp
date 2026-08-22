@@ -735,13 +735,6 @@ QList<AuditRow> Database::ListAudit(int limit, int offset) {
     return rows;
 }
 
-bool Database::DeleteUser(int64_t userId) {
-    QSqlQuery q(m_db);
-    q.prepare("DELETE FROM account WHERE user_id=?");
-    q.addBindValue(static_cast<qlonglong>(userId));
-    return Exec(q);
-}
-
 bool Database::SetAdmin(int64_t userId, bool admin) {
     QSqlQuery q(m_db);
     q.prepare("UPDATE account SET admin=? WHERE user_id=?");

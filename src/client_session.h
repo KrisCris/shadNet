@@ -164,6 +164,12 @@ struct SharedState {
     QHash<QString, Invitation> invitations;
 };
 
+// Deletes an account and every artifact it produced: the database rows (account,
+// timestamps, scores, TUS slots, relationships), the score blob files on disk, and
+// the account's entries in the live leaderboard cache.
+bool DeleteAccountAndArtifacts(Database& db, SharedState* shared, int64_t userId,
+                               PurgeSummary& summary, int& blobsDeleted, int& cachedScoresDropped);
+
 // Per-connection session info
 struct ClientInfo {
     int64_t userId = 0;

@@ -55,18 +55,10 @@ private:
     // Drops the user's live game session, if any. Returns true when one was closed.
     bool KickUser(int64_t userId);
 
-    // Deletes the account's scores, score blobs, TUS slots, and relationships, and
-    // evicts the scores from the live leaderboard cache.
-    bool PurgeUserData(int64_t userId, PurgeSummary& summary, int& cachedScoresDropped,
-                       int& blobsDeleted);
-
-    // As above, but also removes the account row itself.
+    // Removes the account and everything it produced, and evicts its scores from
+    // the live leaderboard cache.
     bool DeleteAccount(int64_t userId, PurgeSummary& summary, int& cachedScoresDropped,
                        int& blobsDeleted);
-
-    // Filesystem + cache cleanup that follows either of the two above.
-    void CleanUpAfterDataRemoval(int64_t userId, const PurgeSummary& summary,
-                                 int& cachedScoresDropped, int& blobsDeleted);
 
     QJsonObject UserRowToJson(const AdminUserRow& row) const;
 

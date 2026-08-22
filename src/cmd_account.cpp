@@ -231,17 +231,37 @@ ErrorType ClientSession::CmdDelete(StreamExtractor& data) {
         return ErrorType::Unauthorized;
     }
 
-    if (!m_db->DeleteUser(userOpt->userId)) {
+    PurgeSummary summary;
+    int blobsDeleted = 0;
+    int cachedScoresDropped = 0;
+    if (!DeleteAccountAndArtifacts(*m_db, m_shared, userOpt->userId, summary, blobsDeleted,
+                                   cachedScoresDropped)) {
         qCritical() << "CmdDelete: DB error deleting" << npid;
         return ErrorType::DbFail;
     }
 
-    qInfo() << "Account deleted:" << npid;
+    qInfo().nospace() << "Account deleted: " << npid << " (scores: " << summary.scores
+                      << ", tus variables: " << summary.tusVariables
+                      << ", tus data: " << summary.tusData
+                      << ", relationships: " << summary.friendships
+                      << ", score blobs: " << blobsDeleted << ")";
 
     if (userOpt->userId == m_info.userId) {
         QWriteLocker lk(&m_shared->clientsLock);
         m_shared->clients.remove(m_info.userId);
         m_authenticated = false;
+    } else {
+        // An admin deleted somebody else. If that account is connected, close its
+        // session too
+        std::function<void()> drop;
+        {
+            QReadLocker lk(&m_shared->clientsLock);
+            const auto it = m_shared->clients.constFind(userOpt->userId);
+            if (it != m_shared->clients.constEnd())
+                drop = it->disconnect;
+        }
+        if (drop)
+            drop();
     }
 
     QMetaObject::invokeMethod(m_socket, "disconnectFromHost", Qt::QueuedConnection);

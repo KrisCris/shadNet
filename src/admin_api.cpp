@@ -347,43 +347,10 @@ bool AdminApiServer::KickUser(int64_t userId) {
     return true;
 }
 
-void AdminApiServer::CleanUpAfterDataRemoval(int64_t userId, const PurgeSummary& summary,
-                                             int& cachedScoresDropped, int& blobsDeleted) {
-    cachedScoresDropped = 0;
-    blobsDeleted = 0;
-
-    // The score blobs live on disk, not in SQLite, so they need a separate sweep.
-    if (m_shared && m_shared->scoreFiles) {
-        for (uint64_t dataId : summary.scoreDataIds) {
-            m_shared->scoreFiles->Remove(dataId);
-            ++blobsDeleted;
-        }
-    } else if (!summary.scoreDataIds.isEmpty()) {
-        qWarning() << "AdminApi: removed" << summary.scoreDataIds.size()
-                   << "score blob row(s) but no ScoreFiles is available; the .sdt files "
-                      "are now orphaned and will be swept on the next restart.";
-    }
-
-    // Evict from the in-memory leaderboards, or the boards keep serving the scores
-    // that were just deleted from the database.
-    if (m_shared && m_shared->scoreCache)
-        cachedScoresDropped = m_shared->scoreCache->RemoveUser(userId);
-}
-
-bool AdminApiServer::PurgeUserData(int64_t userId, PurgeSummary& summary, int& cachedScoresDropped,
-                                   int& blobsDeleted) {
-    if (!m_db->PurgeUserData(userId, summary))
-        return false;
-    CleanUpAfterDataRemoval(userId, summary, cachedScoresDropped, blobsDeleted);
-    return true;
-}
-
 bool AdminApiServer::DeleteAccount(int64_t userId, PurgeSummary& summary, int& cachedScoresDropped,
                                    int& blobsDeleted) {
-    if (!m_db->DeleteAccount(userId, summary))
-        return false;
-    CleanUpAfterDataRemoval(userId, summary, cachedScoresDropped, blobsDeleted);
-    return true;
+    return DeleteAccountAndArtifacts(*m_db, m_shared, userId, summary, blobsDeleted,
+                                     cachedScoresDropped);
 }
 
 QJsonObject AdminApiServer::UserRowToJson(const AdminUserRow& row) const {

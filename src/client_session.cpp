@@ -11,6 +11,31 @@
 #include "stream_extractor.h"
 #include "webapi_routes_session.h"
 
+bool DeleteAccountAndArtifacts(Database& db, SharedState* shared, int64_t userId,
+                               PurgeSummary& summary, int& blobsDeleted, int& cachedScoresDropped) {
+    blobsDeleted = 0;
+    cachedScoresDropped = 0;
+
+    if (!db.DeleteAccount(userId, summary))
+        return false;
+
+    if (shared && shared->scoreFiles) {
+        for (uint64_t dataId : summary.scoreDataIds) {
+            shared->scoreFiles->Remove(dataId);
+            ++blobsDeleted;
+        }
+    } else if (!summary.scoreDataIds.isEmpty()) {
+        qWarning() << "DeleteAccountAndArtifacts: removed" << summary.scoreDataIds.size()
+                   << "score blob row(s) but no ScoreFiles is available; the .sdt files are "
+                      "now orphaned and will be swept on the next restart.";
+    }
+
+    if (shared && shared->scoreCache)
+        cachedScoresDropped = shared->scoreCache->RemoveUser(userId);
+
+    return true;
+}
+
 ClientSession::ClientSession(QTcpSocket* socket, SharedState* shared, const QString& dbPath,
                              bool isSsl, QObject* parent)
     : QObject(parent), m_socket(socket), m_isSsl(isSsl), m_shared(shared),
