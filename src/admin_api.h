@@ -64,7 +64,7 @@ private:
     bool DeleteAccount(int64_t userId, PurgeSummary& summary, int& cachedScoresDropped,
                        int& blobsDeleted);
 
-    // Filesystem + cache cleanup that follows either of the two above. 
+    // Filesystem + cache cleanup that follows either of the two above.
     void CleanUpAfterDataRemoval(int64_t userId, const PurgeSummary& summary,
                                  int& cachedScoresDropped, int& blobsDeleted);
 
