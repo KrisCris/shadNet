@@ -182,6 +182,38 @@ public:
     };
     QList<GameTitleRow> ListScoredGameTitles();
 
+    // Leaderboard moderation
+    // One board that currently holds scores.
+    struct BoardRow {
+        QString comId;
+        QString titleName;
+        uint32_t boardId = 0;
+        int scoreCount = 0;
+    };
+    // Every (com id, board) pair with at least one score, most populated first.
+    QList<BoardRow> ListScoreBoards();
+
+    // One posted score, joined to the account that posted it.
+    struct BoardScoreRow {
+        QString comId;
+        uint32_t boardId = 0;
+        int64_t userId = 0;
+        QString npid; // empty when the account no longer exists
+        int32_t characterId = 0;
+        int64_t score = 0;
+        QString comment;
+        uint64_t dataId = 0; // 0 when the entry has no saved game data
+        int64_t timestamp = 0;
+    };
+    // Scores on one board, highest first.
+    QList<BoardScoreRow> ListBoardScores(const QString& comId, uint32_t boardId, int limit,
+                                         int offset);
+    int CountBoardScores(const QString& comId, uint32_t boardId);
+
+    // Removes exactly one posted score.
+    bool DeleteScore(const QString& comId, uint32_t boardId, int64_t userId, int32_t characterId,
+                     uint64_t& dataId);
+
     QString lastError() const {
         return m_lastError;
     }

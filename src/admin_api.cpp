@@ -965,6 +965,134 @@ void AdminApiServer::RegisterRoutes() {
                       return JsonOk(body);
                   });
 
+    // GET /admin/v1/boards — every board holding scores, most populated first.
+    m_http->route("/admin/v1/boards", QHttpServerRequest::Method::Get,
+                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+
+                      QJsonArray boards;
+                      for (const auto& b : m_db->ListScoreBoards()) {
+                          QJsonObject o;
+                          o.insert(QStringLiteral("comId"), b.comId);
+                          o.insert(QStringLiteral("titleName"), b.titleName);
+                          o.insert(QStringLiteral("boardId"), static_cast<qint64>(b.boardId));
+                          o.insert(QStringLiteral("scoreCount"), b.scoreCount);
+                          boards.append(o);
+                      }
+                      QJsonObject body;
+                      body.insert(QStringLiteral("boards"), boards);
+                      return JsonOk(body);
+                  });
+
+    // GET /admin/v1/boards/<comId>/<boardId>/scores?limit=&offset=
+    m_http->route("/admin/v1/boards/<arg>/<arg>/scores", QHttpServerRequest::Method::Get,
+                  [this](const QString& comId, qint64 boardId,
+                         const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+
+                      const QUrlQuery query(req.url());
+                      bool ok = false;
+                      int limit = query.queryItemValue(QStringLiteral("limit")).toInt(&ok);
+                      if (!ok)
+                          limit = 100;
+                      limit = qBound(1, limit, 500);
+                      int offset = query.queryItemValue(QStringLiteral("offset")).toInt(&ok);
+                      if (!ok || offset < 0)
+                          offset = 0;
+
+                      const auto board = static_cast<uint32_t>(boardId);
+                      QJsonArray scores;
+                      int rank = offset;
+                      for (const auto& r : m_db->ListBoardScores(comId, board, limit, offset)) {
+                          QJsonObject o;
+                          o.insert(QStringLiteral("rank"), ++rank);
+                          o.insert(QStringLiteral("userId"), static_cast<qint64>(r.userId));
+                          // Empty when the account is gone but the score somehow remains.
+                          o.insert(QStringLiteral("npid"), r.npid);
+                          o.insert(QStringLiteral("characterId"), r.characterId);
+                          o.insert(QStringLiteral("score"), static_cast<qint64>(r.score));
+                          o.insert(QStringLiteral("comment"), r.comment);
+                          o.insert(QStringLiteral("hasGameData"), r.dataId != 0);
+                          o.insert(QStringLiteral("timestamp"), static_cast<qint64>(r.timestamp));
+                          scores.append(o);
+                      }
+
+                      QJsonObject body;
+                      body.insert(QStringLiteral("comId"), comId);
+                      body.insert(QStringLiteral("boardId"), boardId);
+                      body.insert(QStringLiteral("scores"), scores);
+                      body.insert(QStringLiteral("total"), m_db->CountBoardScores(comId, board));
+                      body.insert(QStringLiteral("limit"), limit);
+                      body.insert(QStringLiteral("offset"), offset);
+                      return JsonOk(body);
+                  });
+
+    // DELETE /admin/v1/boards/<comId>/<boardId>/scores/<userId>?characterId=N
+    // Removes a single posted score. Unlike deleting the account, this leaves the
+    // player and everything else they own untouched.
+    m_http->route(
+        "/admin/v1/boards/<arg>/<arg>/scores/<arg>", QHttpServerRequest::Method::Delete,
+        [this](const QString& comId, qint64 boardId, qint64 userId,
+               const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+
+            const QUrlQuery query(req.url());
+            bool ok = false;
+            const int characterId = query.queryItemValue(QStringLiteral("characterId")).toInt(&ok);
+            const auto board = static_cast<uint32_t>(boardId);
+            const auto charId = static_cast<int32_t>(ok ? characterId : 0);
+
+            uint64_t dataId = 0;
+            if (!m_db->DeleteScore(comId, board, userId, charId, dataId)) {
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No score on %1 board %2 for account %3 "
+                                                "(character %4).")
+                                     .arg(comId)
+                                     .arg(boardId)
+                                     .arg(userId)
+                                     .arg(charId));
+            }
+
+            // The saved game data attached to the score is only reachable through
+            // that row, so it would otherwise be orphaned on disk.
+            bool blobDeleted = false;
+            if (dataId != 0 && m_shared && m_shared->scoreFiles) {
+                m_shared->scoreFiles->Remove(dataId);
+                blobDeleted = true;
+            }
+
+            // Drop it from the live board too, or it keeps being served.
+            bool cacheUpdated = false;
+            if (m_shared && m_shared->scoreCache)
+                cacheUpdated = m_shared->scoreCache->RemoveEntry(comId, board, userId, charId);
+
+            const QString npid = m_db->GetUsername(userId).value_or(QString::number(userId));
+            m_db->AddAuditEntry(session->userId, session->npid, QStringLiteral("delete_score"),
+                                userId, npid,
+                                QStringLiteral("comId=%1 board=%2 character=%3")
+                                    .arg(comId)
+                                    .arg(boardId)
+                                    .arg(charId));
+            qInfo().nospace().noquote() << "AdminApi: " << session->npid << " deleted a score on "
+                                        << comId << " board " << boardId << " for " << npid;
+
+            QJsonObject body;
+            body.insert(QStringLiteral("deleted"), true);
+            body.insert(QStringLiteral("comId"), comId);
+            body.insert(QStringLiteral("boardId"), boardId);
+            body.insert(QStringLiteral("userId"), userId);
+            body.insert(QStringLiteral("characterId"), charId);
+            body.insert(QStringLiteral("gameDataDeleted"), blobDeleted);
+            body.insert(QStringLiteral("removedFromLiveBoard"), cacheUpdated);
+            return JsonOk(body);
+        });
+
     // GET /admin/v1/audit?limit=&offset= — who did what, most recent first.
     m_http->route("/admin/v1/audit", QHttpServerRequest::Method::Get,
                   [this](const QHttpServerRequest& req) -> QHttpServerResponse {

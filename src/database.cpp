@@ -972,6 +972,104 @@ QList<Database::GameTitleRow> Database::ListScoredGameTitles() {
     return out;
 }
 
+// Leaderboard moderation
+
+QList<Database::BoardRow> Database::ListScoreBoards() {
+    QList<BoardRow> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT s.communication_id, s.board_id, COUNT(*) AS n, "
+              "COALESCE(tn.title_name, '') AS name "
+              "FROM score s LEFT JOIN title_name tn "
+              "  ON tn.communication_id = s.communication_id "
+              "GROUP BY s.communication_id, s.board_id "
+              "ORDER BY n DESC, name ASC, s.communication_id ASC, s.board_id ASC");
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        BoardRow r;
+        r.comId = q.value(0).toString();
+        r.boardId = q.value(1).toUInt();
+        r.scoreCount = q.value(2).toInt();
+        r.titleName = q.value(3).toString();
+        out.append(r);
+    }
+    return out;
+}
+
+QList<Database::BoardScoreRow> Database::ListBoardScores(const QString& comId, uint32_t boardId,
+                                                         int limit, int offset) {
+    QList<BoardScoreRow> out;
+    if (limit <= 0)
+        return out;
+
+    QSqlQuery q(m_db);
+    q.prepare("SELECT s.user_id, COALESCE(a.username, ''), s.character_id, s.score, "
+              "       COALESCE(s.comment, ''), s.data_id, s.timestamp "
+              "FROM score s LEFT JOIN account a ON a.user_id = s.user_id "
+              "WHERE s.communication_id = ? AND s.board_id = ? "
+              "ORDER BY s.score DESC, s.timestamp ASC, s.user_id ASC "
+              "LIMIT ? OFFSET ?");
+    q.addBindValue(comId);
+    q.addBindValue(boardId);
+    q.addBindValue(limit);
+    q.addBindValue(qMax(0, offset));
+    if (!Exec(q))
+        return out;
+
+    while (q.next()) {
+        BoardScoreRow r;
+        r.comId = comId;
+        r.boardId = boardId;
+        r.userId = q.value(0).toLongLong();
+        r.npid = q.value(1).toString();
+        r.characterId = q.value(2).toInt();
+        r.score = q.value(3).toLongLong();
+        r.comment = q.value(4).toString();
+        r.dataId = q.value(5).toULongLong();
+        r.timestamp = q.value(6).toLongLong();
+        out.append(r);
+    }
+    return out;
+}
+
+int Database::CountBoardScores(const QString& comId, uint32_t boardId) {
+    QSqlQuery q(m_db);
+    q.prepare("SELECT COUNT(*) FROM score WHERE communication_id = ? AND board_id = ?");
+    q.addBindValue(comId);
+    q.addBindValue(boardId);
+    return (Exec(q) && q.next()) ? q.value(0).toInt() : 0;
+}
+
+bool Database::DeleteScore(const QString& comId, uint32_t boardId, int64_t userId,
+                           int32_t characterId, uint64_t& dataId) {
+    dataId = 0;
+
+    // Read the blob id before the row goes, or the file becomes unreachable.
+    QSqlQuery look(m_db);
+    look.prepare("SELECT data_id FROM score WHERE communication_id=? AND board_id=? "
+                 "AND user_id=? AND character_id=?");
+    look.addBindValue(comId);
+    look.addBindValue(boardId);
+    look.addBindValue(static_cast<qlonglong>(userId));
+    look.addBindValue(characterId);
+    if (!Exec(look) || !look.next())
+        return false;
+    const qlonglong id = look.value(0).toLongLong();
+    if (id > 0)
+        dataId = static_cast<uint64_t>(id);
+
+    QSqlQuery q(m_db);
+    q.prepare("DELETE FROM score WHERE communication_id=? AND board_id=? "
+              "AND user_id=? AND character_id=?");
+    q.addBindValue(comId);
+    q.addBindValue(boardId);
+    q.addBindValue(static_cast<qlonglong>(userId));
+    q.addBindValue(characterId);
+    if (!Exec(q))
+        return false;
+    return q.numRowsAffected() > 0;
+}
+
 // Friendship DB methods
 
 // The friendship table always stores rows with user_id_1 < user_id_2.

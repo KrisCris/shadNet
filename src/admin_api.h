@@ -55,9 +55,7 @@ private:
     // Drops the user's live game session, if any. Returns true when one was closed.
     bool KickUser(int64_t userId);
 
-    // Invalidates every admin API session belonging to a user. Called when their
-    // admin rights are revoked: without it a demoted admin keeps a working bearer
-    // token until it expires on its own. Returns how many sessions were dropped.
+    // Invalidates every admin API session belonging to a user.
     int RevokeSessionsFor(int64_t userId);
 
     // True when this npid appears in the config's AdminsList, which means startup

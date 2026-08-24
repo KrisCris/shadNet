@@ -50,6 +50,9 @@ public:
     // how many were removed.
     int RemoveUser(int64_t userId);
 
+    // Drops one posted score from the live board and closes the rank gap it left.
+    bool RemoveEntry(const QString& comId, uint32_t boardId, int64_t userId, int32_t characterId);
+
     // Read-only enumeration for the stats server: which com_ids / boards are loaded.
     QVector<QString> ListComIds() const;
     QVector<uint32_t> ListBoards(const QString& comId) const;

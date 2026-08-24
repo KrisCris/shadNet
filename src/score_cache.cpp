@@ -247,6 +247,34 @@ int ScoreCache::RemoveUser(int64_t userId) {
     return removed;
 }
 
+bool ScoreCache::RemoveEntry(const QString& comId, uint32_t boardId, int64_t userId,
+                             int32_t characterId) {
+    QWriteLocker lk(&m_lock);
+    auto comIt = m_tables.find(comId);
+    if (comIt == m_tables.end())
+        return false;
+    auto boardIt = comIt->find(boardId);
+    if (boardIt == comIt->end())
+        return false;
+
+    ScoreTableCache& t = boardIt.value();
+    const int before = t.sorted.size();
+    t.sorted.erase(std::remove_if(t.sorted.begin(), t.sorted.end(),
+                                  [userId, characterId](const ScoreEntry& e) {
+                                      return e.userId == userId && e.characterId == characterId;
+                                  }),
+                   t.sorted.end());
+    if (t.sorted.size() == before)
+        return false;
+
+    // Everyone below the removed row moves up, so rebuild the index rather than
+    // patching a single position.
+    t.lookup.clear();
+    for (int i = 0; i < t.sorted.size(); ++i)
+        t.lookup[t.sorted[i].userId][t.sorted[i].characterId] = i;
+    return true;
+}
+
 QVector<QString> ScoreCache::ListComIds() const {
     QReadLocker lk(&m_lock);
     QVector<QString> out;
