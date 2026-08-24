@@ -55,6 +55,15 @@ private:
     // Drops the user's live game session, if any. Returns true when one was closed.
     bool KickUser(int64_t userId);
 
+    // Invalidates every admin API session belonging to a user. Called when their
+    // admin rights are revoked: without it a demoted admin keeps a working bearer
+    // token until it expires on its own. Returns how many sessions were dropped.
+    int RevokeSessionsFor(int64_t userId);
+
+    // True when this npid appears in the config's AdminsList, which means startup
+    // will grant admin again and a revoke through the API will not stick.
+    bool IsConfigManagedAdmin(const QString& npid) const;
+
     // Removes the account and everything it produced, and evicts its scores from
     // the live leaderboard cache.
     bool DeleteAccount(int64_t userId, PurgeSummary& summary, int& cachedScoresDropped,

@@ -332,6 +332,29 @@ bool AdminApiServer::IsOnline(int64_t userId) const {
     return m_shared->clients.contains(userId);
 }
 
+int AdminApiServer::RevokeSessionsFor(int64_t userId) {
+    QMutexLocker lk(&m_sessionsMutex);
+    int dropped = 0;
+    for (auto it = m_sessions.begin(); it != m_sessions.end();) {
+        if (it->userId == userId) {
+            it = m_sessions.erase(it);
+            ++dropped;
+        } else {
+            ++it;
+        }
+    }
+    return dropped;
+}
+
+bool AdminApiServer::IsConfigManagedAdmin(const QString& npid) const {
+    const QStringList admins = m_config->GetAdminsList();
+    for (const QString& listed : admins) {
+        if (listed.trimmed().compare(npid, Qt::CaseInsensitive) == 0)
+            return true;
+    }
+    return false;
+}
+
 bool AdminApiServer::KickUser(int64_t userId) {
     if (!m_shared)
         return false;
@@ -714,6 +737,118 @@ void AdminApiServer::RegisterRoutes() {
             body.insert(QStringLiteral("removed"), removed);
             return JsonOk(body);
         });
+
+    // POST /admin/v1/users/<id>/admin — { admin: bool, reason?: string }
+    m_http->route(
+        "/admin/v1/users/<arg>/admin", QHttpServerRequest::Method::Post,
+        [this](qint64 userId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+            if (!bodyOpt->contains(QStringLiteral("admin")))
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("Body must set \"admin\" to true or false."));
+
+            const bool makeAdmin = bodyOpt->value(QStringLiteral("admin")).toBool();
+            const QString reason =
+                bodyOpt->value(QStringLiteral("reason")).toString().trimmed().left(500);
+
+            const auto target = m_db->GetUserRow(userId);
+            if (!target)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No account has id %1.").arg(userId));
+
+            // Demoting yourself would end your own access mid-session, and there may
+            // be no other admin to undo it. Another admin can still demote you.
+            if (target->userId == session->userId)
+                return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_FORBIDDEN_TARGET,
+                                 QStringLiteral("You can't change your own admin rights."));
+
+            if (target->admin == makeAdmin) {
+                QJsonObject body;
+                body.insert(QStringLiteral("user"), UserRowToJson(*target));
+                body.insert(QStringLiteral("changed"), false);
+                return JsonOk(body);
+            }
+
+            // Granting admin to a banned account would hand moderation powers to
+            // someone who cannot even sign in. Lift the ban first, deliberately.
+            if (makeAdmin && target->banned)
+                return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_FORBIDDEN_TARGET,
+                                 QStringLiteral("%1 is banned. Lift the ban before granting "
+                                                "admin rights.")
+                                     .arg(target->username));
+
+            if (!m_db->SetAdmin(target->userId, makeAdmin)) {
+                qCritical() << "AdminApi: SetAdmin failed for" << target->username << ":"
+                            << m_db->lastError();
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The database rejected the change. "
+                                                "Check the server log."));
+            }
+
+            // A revoked admin must lose their live admin session too, or their
+            // bearer token keeps working until it expires on its own.
+            const int sessionsDropped = makeAdmin ? 0 : RevokeSessionsFor(target->userId);
+
+            m_db->AddAuditEntry(session->userId, session->npid,
+                                makeAdmin ? QStringLiteral("grant_admin")
+                                          : QStringLiteral("revoke_admin"),
+                                target->userId, target->username, reason);
+
+            qInfo().nospace().noquote()
+                << "AdminApi: " << session->npid
+                << (makeAdmin ? " granted admin to " : " revoked admin from ") << target->username
+                << (sessionsDropped > 0
+                        ? QStringLiteral(" (%1 session(s) ended)").arg(sessionsDropped)
+                        : QString());
+
+            const auto updated = m_db->GetUserRow(target->userId);
+            QJsonObject body;
+            body.insert(QStringLiteral("user"),
+                        updated ? UserRowToJson(*updated) : UserRowToJson(*target));
+            body.insert(QStringLiteral("changed"), true);
+            body.insert(QStringLiteral("sessionsEnded"), sessionsDropped);
+            // AdminsList is applied at every startup, so revoking an account named
+            // there only lasts until the next restart. Say so rather than letting
+            // the change quietly reappear.
+            body.insert(QStringLiteral("configManaged"), IsConfigManagedAdmin(target->username));
+            return JsonOk(body);
+        });
+
+    // POST /admin/v1/users/<id>/kick — close a live game session without banning.
+    m_http->route("/admin/v1/users/<arg>/kick", QHttpServerRequest::Method::Post,
+                  [this](qint64 userId, const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+
+                      const auto target = m_db->GetUserRow(userId);
+                      if (!target)
+                          return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                           QStringLiteral("No account has id %1.").arg(userId));
+
+                      const bool kicked = KickUser(target->userId);
+                      if (kicked) {
+                          m_db->AddAuditEntry(session->userId, session->npid,
+                                              QStringLiteral("kick"), target->userId,
+                                              target->username, QString());
+                          qInfo().nospace().noquote() << "AdminApi: " << session->npid
+                                                      << " disconnected " << target->username;
+                      }
+
+                      QJsonObject body;
+                      body.insert(QStringLiteral("kicked"), kicked);
+                      body.insert(QStringLiteral("npid"), target->username);
+                      body.insert(QStringLiteral("userId"), static_cast<qint64>(target->userId));
+                      return JsonOk(body);
+                  });
 
     // GET /admin/v1/audit?limit=&offset= — who did what, most recent first.
     m_http->route("/admin/v1/audit", QHttpServerRequest::Method::Get,
