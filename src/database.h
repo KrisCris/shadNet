@@ -135,6 +135,12 @@ public:
     // Removes the account row itself along with everything PurgeUserData covers
     bool DeleteAccount(int64_t userId, PurgeSummary& summary);
     bool SetAdmin(int64_t userId, bool admin);
+
+    // Replaces an account's password. Generates a fresh salt, and rotates the
+    // account token so any client still holding the old one has to sign in again —
+    // a password reset that left existing sessions working would not be much of a
+    // reset. Also clears any pending reset_token.
+    bool SetPassword(int64_t userId, const QString& newPassword);
     int TotalUsers();
 
     // Deletes everything this account produced: leaderboard scores, TUS variable

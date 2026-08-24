@@ -36,6 +36,23 @@ constexpr int ERR_NOT_FOUND = 4040;
 constexpr int ERR_TOO_MANY_ATTEMPTS = 4290;
 constexpr int ERR_INTERNAL = 5000;
 
+// Shortest password an admin may set. Not a policy engine — just a floor that stops
+// a support reset from handing out something trivially guessable.
+constexpr int kMinPasswordLength = 8;
+
+QString GeneratePassword() {
+    // No look-alike characters (0/O, 1/l/I): these get read aloud and typed by hand.
+    static const QString chars = QStringLiteral("ABCDEFGHJKLMNPQRSTUVWXYZ"
+                                                "abcdefghijkmnopqrstuvwxyz"
+                                                "23456789");
+    QString out;
+    out.reserve(14);
+    QRandomGenerator* gen = QRandomGenerator::system();
+    for (int i = 0; i < 14; ++i)
+        out.append(chars.at(gen->bounded(chars.size())));
+    return out;
+}
+
 constexpr int kMaxLoginFailures = 5;
 constexpr int kLoginBlockSeconds = 300;
 
@@ -847,6 +864,104 @@ void AdminApiServer::RegisterRoutes() {
                       body.insert(QStringLiteral("kicked"), kicked);
                       body.insert(QStringLiteral("npid"), target->username);
                       body.insert(QStringLiteral("userId"), static_cast<qint64>(target->userId));
+                      return JsonOk(body);
+                  });
+
+    // POST /admin/v1/users/<id>/password — { password?: string }
+    // With no password supplied the server generates one and returns it once.
+    m_http->route(
+        "/admin/v1/users/<arg>/password", QHttpServerRequest::Method::Post,
+        [this](qint64 userId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+
+            QString supplied;
+            if (!req.body().trimmed().isEmpty()) {
+                QString parseError;
+                const auto bodyOpt = ParseJsonBody(req, parseError);
+                if (!bodyOpt)
+                    return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                     parseError);
+                supplied = bodyOpt->value(QStringLiteral("password")).toString();
+            }
+
+            if (!supplied.isEmpty() && supplied.length() < kMinPasswordLength)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("Password must be at least %1 characters.")
+                                     .arg(kMinPasswordLength));
+
+            const auto target = m_db->GetUserRow(userId);
+            if (!target)
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No account has id %1.").arg(userId));
+
+            const bool generated = supplied.isEmpty();
+            const QString password = generated ? GeneratePassword() : supplied;
+
+            if (!m_db->SetPassword(target->userId, password)) {
+                qCritical() << "AdminApi: password reset failed for" << target->username << ":"
+                            << m_db->lastError();
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The database rejected the change. "
+                                                "Check the server log."));
+            }
+
+            // The account token was rotated, so the live game session is now holding
+            // a credential the server no longer accepts. Close it rather than
+            // leaving them connected in an undefined state.
+            const bool kicked = KickUser(target->userId);
+
+            // The password itself is never written to the log — only that it changed.
+            m_db->AddAuditEntry(session->userId, session->npid, QStringLiteral("reset_password"),
+                                target->userId, target->username,
+                                generated ? QStringLiteral("generated")
+                                          : QStringLiteral("set by admin"));
+            qInfo().nospace().noquote()
+                << "AdminApi: " << session->npid << " reset the password for " << target->username;
+
+            QJsonObject body;
+            body.insert(QStringLiteral("ok"), true);
+            body.insert(QStringLiteral("npid"), target->username);
+            body.insert(QStringLiteral("kicked"), kicked);
+            body.insert(QStringLiteral("generated"), generated);
+            // Returned once, and only when the server made it up. A password the
+            // admin chose is not echoed back.
+            if (generated)
+                body.insert(QStringLiteral("password"), password);
+            return JsonOk(body);
+        });
+
+    // GET /admin/v1/online — who is connected right now, with their title context.
+    m_http->route("/admin/v1/online", QHttpServerRequest::Method::Get,
+                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+
+                      QJsonArray players;
+                      if (m_shared) {
+                          QReadLocker lk(&m_shared->clientsLock);
+                          for (auto it = m_shared->clients.constBegin();
+                               it != m_shared->clients.constEnd(); ++it) {
+                              QJsonObject o;
+                              o.insert(QStringLiteral("userId"), static_cast<qint64>(it.key()));
+                              o.insert(QStringLiteral("npid"), it->npid);
+                              o.insert(QStringLiteral("titleId"), it->npTitleId);
+                              o.insert(QStringLiteral("titleName"), it->titleName);
+                              o.insert(QStringLiteral("gameStatus"), it->gameStatus);
+                              o.insert(QStringLiteral("platform"), it->platform);
+                              o.insert(QStringLiteral("presenceUpdatedAt"), it->presenceUpdatedAt);
+                              // Reported so an admin sees the true picture: appearing offline
+                              // hides someone from other players, not from moderation.
+                              o.insert(QStringLiteral("appearOffline"), it->appearOffline);
+                              players.append(o);
+                          }
+                      }
+
+                      QJsonObject body;
+                      body.insert(QStringLiteral("players"), players);
+                      body.insert(QStringLiteral("total"), players.size());
                       return JsonOk(body);
                   });
 

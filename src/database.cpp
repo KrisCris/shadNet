@@ -735,6 +735,36 @@ QList<AuditRow> Database::ListAudit(int limit, int offset) {
     return rows;
 }
 
+bool Database::SetPassword(int64_t userId, const QString& newPassword) {
+    if (newPassword.isEmpty()) {
+        m_lastError = QStringLiteral("Password must not be empty");
+        return false;
+    }
+
+    const QByteArray salt = GenerateSalt();
+    if (salt.isEmpty()) {
+        m_lastError = QStringLiteral("Failed to generate salt");
+        qCritical() << "SetPassword: could not generate salt";
+        return false;
+    }
+    const QByteArray hash = HashPassword(newPassword, salt);
+    if (hash.isEmpty()) {
+        m_lastError = QStringLiteral("Failed to hash password");
+        qCritical() << "SetPassword: could not hash password";
+        return false;
+    }
+
+    QSqlQuery q(m_db);
+    q.prepare("UPDATE account SET hash=?, salt=?, token=?, reset_token=NULL WHERE user_id=?");
+    q.addBindValue(hash);
+    q.addBindValue(salt);
+    q.addBindValue(GenerateToken());
+    q.addBindValue(static_cast<qlonglong>(userId));
+    if (!Exec(q))
+        return false;
+    return q.numRowsAffected() > 0;
+}
+
 bool Database::SetAdmin(int64_t userId, bool admin) {
     QSqlQuery q(m_db);
     q.prepare("UPDATE account SET admin=? WHERE user_id=?");
