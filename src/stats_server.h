@@ -39,6 +39,7 @@ private:
     QByteArray BuildBoardScoreJson(const QString& comId, uint32_t boardId) const;
     QByteArray BuildScoreListJson() const;
     QByteArray BuildVersionJson() const;
+    QByteArray BuildTrophyStatsJson(const QString& comId) const;
 
     ConfigManager* m_config = nullptr;
     ScoreCache* m_scoreCache = nullptr;

@@ -292,6 +292,10 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdTusTryAndSetVariable(se, reply);
     case CommandType::TusGetFriendsVariable:
         return CmdTusGetFriendsVariable(se, reply);
+    case CommandType::UnlockTrophy:
+        return CmdUnlockTrophy(se);
+    case CommandType::SyncTrophies:
+        return CmdSyncTrophies(se, reply);
     case CommandType::TusDeleteMultiSlotVariable:
         return CmdTusDeleteMultiSlotVariable(se);
     default:
@@ -304,9 +308,11 @@ ErrorType ClientSession::CmdGetServerFeatures(QByteArray& reply) {
     shadnet::ServerFeaturesReply rep;
     rep.set_matching2_enabled(m_shared && m_shared->config &&
                               m_shared->config->IsMatching2Enabled());
+    rep.set_trophies_enabled(TrophiesEnabled());
     appendProto(reply, rep);
     qInfo() << "GetServerFeatures:" << m_info.npid
-            << "matching2_enabled=" << rep.matching2_enabled();
+            << "matching2_enabled=" << rep.matching2_enabled()
+            << "trophies_enabled=" << rep.trophies_enabled();
     return ErrorType::NoError;
 }
 

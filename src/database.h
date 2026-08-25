@@ -83,6 +83,7 @@ struct AuditRow {
 // What a PurgeUserData call removed.
 struct PurgeSummary {
     int scores = 0;
+    int trophies = 0;
     int tusVariables = 0;
     int tusData = 0;
     int friendships = 0;
@@ -90,7 +91,7 @@ struct PurgeSummary {
     QList<uint64_t> scoreDataIds;
 
     int total() const {
-        return scores + tusVariables + tusData + friendships;
+        return scores + trophies + tusVariables + tusData + friendships;
     }
 };
 
@@ -213,6 +214,46 @@ public:
     // Removes exactly one posted score.
     bool DeleteScore(const QString& comId, uint32_t boardId, int64_t userId, int32_t characterId,
                      uint64_t& dataId);
+
+    // Trophies
+    // One trophy a player has unlocked.
+    struct TrophyRow {
+        QString comId;
+        QString titleName;
+        int32_t trophyId = 0;
+        int64_t earnedAt = 0;
+    };
+    // A game somebody has earned trophies in, with how widely.
+    struct TrophyGameRow {
+        QString comId;
+        QString titleName;
+        int players = 0;  // distinct accounts holding at least one trophy
+        int trophies = 0; // distinct trophy ids earned at least once
+        int unlocks = 0;  // total unlock records
+    };
+    // How many accounts hold a given trophy in a game.
+    struct TrophyEarnerRow {
+        int32_t trophyId = 0;
+        int earners = 0;
+    };
+
+    // Records an unlock.
+    bool RecordUserTrophy(int64_t userId, const QString& comId, int32_t trophyId, int64_t earnedAt);
+    bool RecordUserTrophies(int64_t userId, const QString& comId,
+                            const QList<QPair<int32_t, int64_t>>& trophies);
+
+    // Every trophy one account holds, ordered by game then trophy id.
+    QList<TrophyRow> ListUserTrophies(int64_t userId);
+    // Trophies one account holds in one game.
+    QList<TrophyRow> ListUserTrophiesForGame(int64_t userId, const QString& comId);
+    // Games with any trophy activity, most played first.
+    QList<TrophyGameRow> ListTrophyGames();
+    // Earner counts per trophy for one game — the input to "earned by X%".
+    QList<TrophyEarnerRow> ListTrophyEarners(const QString& comId);
+    int CountTrophyPlayers(const QString& comId);
+
+    // Removes one unlock record.
+    bool DeleteUserTrophy(int64_t userId, const QString& comId, int32_t trophyId);
 
     QString lastError() const {
         return m_lastError;

@@ -50,7 +50,10 @@ public:
         QReadLocker lk(&m_lock);
         return m_matching2Enabled;
     }
-
+    bool IsTrophiesEnabled() const {
+        QReadLocker lk(&m_lock);
+        return m_trophiesEnabled;
+    }
     bool IsAdminApiEnabled() const {
         QReadLocker lk(&m_lock);
         return m_adminApiEnabled;
@@ -134,6 +137,7 @@ private:
     QString m_webapiPort = "31315";
     bool m_statsEnabled = true;
     bool m_matching2Enabled = false;
+    bool m_trophiesEnabled = true;
     QString m_statsPort = "31320";
     QString m_statsPath = "stats";
     int m_statsCacheLife = 30; // seconds the stats JSON is cached before recompute

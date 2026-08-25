@@ -76,6 +76,9 @@ enum class CommandType : uint16_t {
     TusTryAndSetVariable = 211,
     TusGetFriendsVariable = 212,
     TusDeleteMultiSlotVariable = 213,
+    // Trophies
+    UnlockTrophy = 301,
+    SyncTrophies = 302,
 };
 
 // Notification type IDs (u16 LE in Notification packet header).

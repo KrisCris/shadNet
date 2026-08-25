@@ -262,6 +262,24 @@ bool Database::Migrate() {
         Exec(ins3);
     }
 
+    // Migration 4: per-account trophy records.
+    if (!HasMigration(4)) {
+        Exec("CREATE TABLE IF NOT EXISTS user_trophies("
+             "  user_id          UNSIGNED BIGINT NOT NULL,"
+             "  communication_id TEXT            NOT NULL,"
+             "  trophy_id        INTEGER         NOT NULL,"
+             "  earned_at        UNSIGNED BIGINT NOT NULL,"
+             "  PRIMARY KEY(user_id, communication_id, trophy_id),"
+             "  FOREIGN KEY(user_id) REFERENCES account(user_id) ON DELETE CASCADE)");
+        // Earned-percentage and per-game stats scan by com id, not by user.
+        Exec("CREATE INDEX IF NOT EXISTS user_trophies_game "
+             "ON user_trophies(communication_id, trophy_id)");
+
+        QSqlQuery ins4(m_db);
+        ins4.prepare("INSERT OR IGNORE INTO migration VALUES(4,'user trophy records')");
+        Exec(ins4);
+    }
+
     qInfo() << "Database migrations complete";
 
     RunMaintenance();
@@ -796,6 +814,7 @@ bool Database::PurgeUserDataStatements(int64_t userId, PurgeSummary& summary) {
         int* counter;
     } steps[] = {
         {"DELETE FROM score WHERE user_id=?", 1, &summary.scores},
+        {"DELETE FROM user_trophies WHERE user_id=?", 1, &summary.trophies},
         {"DELETE FROM tus_variable WHERE owner_user_id=?", 1, &summary.tusVariables},
         {"DELETE FROM tus_data WHERE owner_user_id=?", 1, &summary.tusData},
         {"DELETE FROM friendship WHERE user_id_1=? OR user_id_2=?", 2, &summary.friendships},
@@ -843,8 +862,8 @@ bool Database::PurgeUserData(int64_t userId, PurgeSummary& summary) {
     }
 
     qInfo() << "PurgeUserData: user" << userId << "— scores:" << summary.scores
-            << "tus variables:" << summary.tusVariables << "tus data:" << summary.tusData
-            << "relationships:" << summary.friendships;
+            << "trophies:" << summary.trophies << "tus variables:" << summary.tusVariables
+            << "tus data:" << summary.tusData << "relationships:" << summary.friendships;
     return true;
 }
 
@@ -891,8 +910,8 @@ bool Database::DeleteAccount(int64_t userId, PurgeSummary& summary) {
     }
 
     qInfo() << "DeleteAccount: removed user" << userId << "— scores:" << summary.scores
-            << "tus variables:" << summary.tusVariables << "tus data:" << summary.tusData
-            << "relationships:" << summary.friendships;
+            << "trophies:" << summary.trophies << "tus variables:" << summary.tusVariables
+            << "tus data:" << summary.tusData << "relationships:" << summary.friendships;
     return true;
 }
 
@@ -1065,6 +1084,166 @@ bool Database::DeleteScore(const QString& comId, uint32_t boardId, int64_t userI
     q.addBindValue(boardId);
     q.addBindValue(static_cast<qlonglong>(userId));
     q.addBindValue(characterId);
+    if (!Exec(q))
+        return false;
+    return q.numRowsAffected() > 0;
+}
+
+// Trophies
+
+bool Database::RecordUserTrophy(int64_t userId, const QString& comId, int32_t trophyId,
+                                int64_t earnedAt) {
+    QSqlQuery q(m_db);
+    // OR IGNORE, not OR REPLACE: the primary key already holds the first unlock,
+    // and a later re-sync should not move the date somebody earned it.
+    q.prepare("INSERT OR IGNORE INTO user_trophies(user_id, communication_id, trophy_id, "
+              "earned_at) VALUES(?,?,?,?)");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    q.addBindValue(comId);
+    q.addBindValue(trophyId);
+    q.addBindValue(static_cast<qlonglong>(earnedAt));
+    return Exec(q);
+}
+
+bool Database::RecordUserTrophies(int64_t userId, const QString& comId,
+                                  const QList<QPair<int32_t, int64_t>>& trophies) {
+    if (trophies.isEmpty())
+        return true;
+
+    if (!m_db.transaction()) {
+        m_lastError = m_db.lastError().text();
+        qCritical() << "RecordUserTrophies: cannot start transaction:" << m_lastError;
+        return false;
+    }
+
+    QSqlQuery q(m_db);
+    if (!q.prepare("INSERT OR IGNORE INTO user_trophies(user_id, communication_id, trophy_id, "
+                   "earned_at) VALUES(?,?,?,?)")) {
+        m_lastError = q.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    // One prepared statement reused per row, rather than a generated
+    // multi-row VALUES list: no statement-length ceiling to worry about.
+    for (const auto& t : trophies) {
+        q.bindValue(0, static_cast<qlonglong>(userId));
+        q.bindValue(1, comId);
+        q.bindValue(2, t.first);
+        q.bindValue(3, static_cast<qlonglong>(t.second));
+        if (!Exec(q)) {
+            qCritical() << "RecordUserTrophies: insert failed:" << m_lastError;
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    if (!m_db.commit()) {
+        m_lastError = m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    return true;
+}
+
+QList<Database::TrophyRow> Database::ListUserTrophies(int64_t userId) {
+    QList<TrophyRow> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT t.communication_id, COALESCE(tn.title_name, ''), t.trophy_id, t.earned_at "
+              "FROM user_trophies t "
+              "LEFT JOIN title_name tn ON tn.communication_id = t.communication_id "
+              "WHERE t.user_id = ? "
+              "ORDER BY t.communication_id ASC, t.trophy_id ASC");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        TrophyRow r;
+        r.comId = q.value(0).toString();
+        r.titleName = q.value(1).toString();
+        r.trophyId = q.value(2).toInt();
+        r.earnedAt = q.value(3).toLongLong();
+        out.append(r);
+    }
+    return out;
+}
+
+QList<Database::TrophyRow> Database::ListUserTrophiesForGame(int64_t userId, const QString& comId) {
+    QList<TrophyRow> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT t.communication_id, COALESCE(tn.title_name, ''), t.trophy_id, t.earned_at "
+              "FROM user_trophies t "
+              "LEFT JOIN title_name tn ON tn.communication_id = t.communication_id "
+              "WHERE t.user_id = ? AND t.communication_id = ? "
+              "ORDER BY t.trophy_id ASC");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    q.addBindValue(comId);
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        TrophyRow r;
+        r.comId = q.value(0).toString();
+        r.titleName = q.value(1).toString();
+        r.trophyId = q.value(2).toInt();
+        r.earnedAt = q.value(3).toLongLong();
+        out.append(r);
+    }
+    return out;
+}
+
+QList<Database::TrophyGameRow> Database::ListTrophyGames() {
+    QList<TrophyGameRow> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT t.communication_id, COALESCE(tn.title_name, ''), "
+              "       COUNT(DISTINCT t.user_id), COUNT(DISTINCT t.trophy_id), COUNT(*) "
+              "FROM user_trophies t "
+              "LEFT JOIN title_name tn ON tn.communication_id = t.communication_id "
+              "GROUP BY t.communication_id "
+              "ORDER BY COUNT(DISTINCT t.user_id) DESC, t.communication_id ASC");
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        TrophyGameRow r;
+        r.comId = q.value(0).toString();
+        r.titleName = q.value(1).toString();
+        r.players = q.value(2).toInt();
+        r.trophies = q.value(3).toInt();
+        r.unlocks = q.value(4).toInt();
+        out.append(r);
+    }
+    return out;
+}
+
+QList<Database::TrophyEarnerRow> Database::ListTrophyEarners(const QString& comId) {
+    QList<TrophyEarnerRow> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT trophy_id, COUNT(*) FROM user_trophies WHERE communication_id = ? "
+              "GROUP BY trophy_id ORDER BY trophy_id ASC");
+    q.addBindValue(comId);
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        TrophyEarnerRow r;
+        r.trophyId = q.value(0).toInt();
+        r.earners = q.value(1).toInt();
+        out.append(r);
+    }
+    return out;
+}
+
+int Database::CountTrophyPlayers(const QString& comId) {
+    QSqlQuery q(m_db);
+    q.prepare("SELECT COUNT(DISTINCT user_id) FROM user_trophies WHERE communication_id = ?");
+    q.addBindValue(comId);
+    return (Exec(q) && q.next()) ? q.value(0).toInt() : 0;
+}
+
+bool Database::DeleteUserTrophy(int64_t userId, const QString& comId, int32_t trophyId) {
+    QSqlQuery q(m_db);
+    q.prepare("DELETE FROM user_trophies WHERE user_id=? AND communication_id=? AND trophy_id=?");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    q.addBindValue(comId);
+    q.addBindValue(trophyId);
     if (!Exec(q))
         return false;
     return q.numRowsAffected() > 0;

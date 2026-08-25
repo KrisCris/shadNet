@@ -4,6 +4,8 @@
 
 #include "version.h"
 
+#include <cmath>
+
 #include <QDebug>
 #include <QHostAddress>
 #include <QHttpServerRequest>
@@ -14,7 +16,7 @@
 #include <QJsonObject>
 #include <QMutexLocker>
 #include <QReadLocker>
-#include "client_session.h" // SharedState
+#include "client_session.h"
 #include "database.h"
 #include "score_cache.h"
 
@@ -88,6 +90,12 @@ void StatsServer::RegisterRoutes() {
     // GET /<statsPath>/version -> server version and when this binary was built.
     m_http->route(base + "/version",
                   [this](const QHttpServerRequest&) { return jsonResponse(BuildVersionJson()); });
+
+    // GET /<statsPath>/trophies/<comId> -> how widely each trophy has been earned.
+    m_http->route(base + "/trophies/<arg>",
+                  [this](const QString& comId, const QHttpServerRequest&) {
+                      return jsonResponse(BuildTrophyStatsJson(comId));
+                  });
 
     // GET /<path>/usage
     m_http->route(base + "/usage", [this](const QHttpServerRequest&) {
@@ -224,6 +232,32 @@ QByteArray StatsServer::BuildBoardScoreJson(const QString& comId, uint32_t board
     root.insert("total_record", static_cast<qint64>(resp.totalrecord()));
     root.insert("last_sort_date", static_cast<qint64>(resp.lastsortdate()));
     root.insert("ranks", ranksToJson(resp));
+    return toJson(root);
+}
+
+QByteArray StatsServer::BuildTrophyStatsJson(const QString& comId) const {
+    QJsonObject root;
+    Database db(QString{});
+    if (!db.Open(m_dbPath)) {
+        qWarning() << "StatsServer: cannot open DB for trophy stats";
+        root.insert("error", QStringLiteral("db unavailable"));
+        return toJson(root);
+    }
+
+    const int players = db.CountTrophyPlayers(comId);
+    QJsonArray trophies;
+    for (const auto& e : db.ListTrophyEarners(comId)) {
+        QJsonObject o;
+        o.insert("trophyId", e.trophyId);
+        o.insert("earners", e.earners);
+        o.insert("earnedPercent",
+                 players > 0 ? std::round(e.earners * 10000.0 / players) / 100.0 : 0.0);
+        trophies.append(o);
+    }
+
+    root.insert("commid", comId);
+    root.insert("players", players);
+    root.insert("trophies", trophies);
     return toJson(root);
 }
 
