@@ -92,10 +92,34 @@ void StatsServer::RegisterRoutes() {
                   [this](const QHttpServerRequest&) { return jsonResponse(BuildVersionJson()); });
 
     // GET /<statsPath>/trophies/<comId> -> how widely each trophy has been earned.
-    m_http->route(base + "/trophies/<arg>",
-                  [this](const QString& comId, const QHttpServerRequest&) {
-                      return jsonResponse(BuildTrophyStatsJson(comId));
+    // GET /<path>/trophies -> games with trophy activity, plus server-wide totals
+    m_http->route(base + "/trophies", [this](const QHttpServerRequest&) {
+        return jsonResponse(
+            CachedOrBuild(QStringLiteral("trophylist"), [this] { return BuildTrophyListJson(); }));
+    });
+
+    // GET /<path>/trophies/player/<npid> -> one player's trophy profile.
+    m_http->route(base + "/trophies/player/<arg>",
+                  [this](const QString& npid, const QHttpServerRequest&) {
+                      if (npid.isEmpty() || npid.size() > 16) {
+                          return QHttpServerResponse{QHttpServerResponse::StatusCode::NotFound};
+                      }
+                      const QString key = QStringLiteral("trophyplayer:") + npid;
+                      return jsonResponse(
+                          CachedOrBuild(key, [this, npid] { return BuildTrophyPlayerJson(npid); }));
                   });
+
+    // GET /<path>/trophies/<comId> -> trophy rarity for a game and its top holders.
+    m_http->route(
+        base + "/trophies/<arg>", [this](const QString& comId, const QHttpServerRequest&) {
+            // Same bounds the score routes use: a com id is 9-12 characters.
+            if (comId.size() < 9 || comId.size() > 12) {
+                return QHttpServerResponse{QHttpServerResponse::StatusCode::NotFound};
+            }
+            const QString key = QStringLiteral("trophies:") + comId;
+            return jsonResponse(
+                CachedOrBuild(key, [this, comId] { return BuildTrophyStatsJson(comId); }));
+        });
 
     // GET /<path>/usage
     m_http->route(base + "/usage", [this](const QHttpServerRequest&) {
@@ -246,6 +270,7 @@ QByteArray StatsServer::BuildTrophyStatsJson(const QString& comId) const {
 
     const int players = db.CountTrophyPlayers(comId);
     QJsonArray trophies;
+    int unlocks = 0;
     for (const auto& e : db.ListTrophyEarners(comId)) {
         QJsonObject o;
         o.insert("trophyId", e.trophyId);
@@ -253,11 +278,99 @@ QByteArray StatsServer::BuildTrophyStatsJson(const QString& comId) const {
         o.insert("earnedPercent",
                  players > 0 ? std::round(e.earners * 10000.0 / players) / 100.0 : 0.0);
         trophies.append(o);
+        unlocks += e.earners;
+    }
+
+    QJsonArray top;
+    for (const auto& tp : db.ListTopTrophyPlayers(comId, 25)) {
+        QJsonObject o;
+        o.insert("npid", tp.npid);
+        o.insert("trophies", tp.trophies);
+        o.insert("lastEarnedAt", static_cast<qint64>(tp.lastEarnedAt));
+        top.append(o);
+    }
+
+    QString titleName;
+    for (const auto& g : db.ListTrophyGames()) {
+        if (g.comId == comId) {
+            titleName = g.titleName;
+            break;
+        }
     }
 
     root.insert("commid", comId);
+    root.insert("name", titleName);
     root.insert("players", players);
+    root.insert("distinctTrophies", trophies.size());
+    root.insert("unlocks", unlocks);
     root.insert("trophies", trophies);
+    root.insert("topPlayers", top);
+    return toJson(root);
+}
+
+QByteArray StatsServer::BuildTrophyListJson() const {
+    QJsonObject root;
+    Database db(QString{});
+    if (!db.Open(m_dbPath)) {
+        qWarning() << "StatsServer: cannot open DB for trophy list";
+        root.insert("error", QStringLiteral("db unavailable"));
+        return toJson(root);
+    }
+
+    QJsonArray games;
+    for (const auto& g : db.ListTrophyGames()) {
+        QJsonObject o;
+        o.insert("commid", g.comId);
+        o.insert("name", g.titleName);
+        o.insert("players", g.players);
+        o.insert("distinctTrophies", g.trophies);
+        o.insert("unlocks", g.unlocks);
+        games.append(o);
+    }
+
+    const auto totals = db.GetTrophyTotals();
+    QJsonObject t;
+    t.insert("players", totals.players);
+    t.insert("games", totals.games);
+    t.insert("unlocks", totals.unlocks);
+
+    root.insert("totals", t);
+    root.insert("games", games);
+    return toJson(root);
+}
+
+QByteArray StatsServer::BuildTrophyPlayerJson(const QString& npid) const {
+    QJsonObject root;
+    Database db(QString{});
+    if (!db.Open(m_dbPath)) {
+        qWarning() << "StatsServer: cannot open DB for trophy profile";
+        root.insert("error", QStringLiteral("db unavailable"));
+        return toJson(root);
+    }
+
+    const auto userId = db.GetUserId(npid);
+    if (!userId) {
+        root.insert("npid", npid);
+        root.insert("total", 0);
+        root.insert("games", QJsonArray{});
+        return toJson(root);
+    }
+
+    QJsonArray games;
+    int total = 0;
+    for (const auto& g : db.ListPlayerTrophySummary(*userId)) {
+        QJsonObject o;
+        o.insert("commid", g.comId);
+        o.insert("name", g.titleName);
+        o.insert("trophies", g.trophies);
+        o.insert("firstEarnedAt", static_cast<qint64>(g.firstEarnedAt));
+        o.insert("lastEarnedAt", static_cast<qint64>(g.lastEarnedAt));
+        games.append(o);
+        total += g.trophies;
+    }
+    root.insert("npid", db.GetUsername(*userId).value_or(npid));
+    root.insert("total", total);
+    root.insert("games", games);
     return toJson(root);
 }
 

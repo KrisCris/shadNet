@@ -1238,6 +1238,72 @@ int Database::CountTrophyPlayers(const QString& comId) {
     return (Exec(q) && q.next()) ? q.value(0).toInt() : 0;
 }
 
+QList<Database::TrophyPlayerRow> Database::ListTopTrophyPlayers(const QString& comId, int limit) {
+    QList<TrophyPlayerRow> out;
+    if (limit <= 0)
+        return out;
+    QSqlQuery q(m_db);
+    // INNER JOIN on purpose: a public leaderboard should not list rows whose
+    // account no longer exists.
+    q.prepare("SELECT t.user_id, a.username, COUNT(*), MAX(t.earned_at) "
+              "FROM user_trophies t JOIN account a ON a.user_id = t.user_id "
+              "WHERE t.communication_id = ? "
+              "GROUP BY t.user_id "
+              "ORDER BY COUNT(*) DESC, MAX(t.earned_at) ASC, a.username ASC "
+              "LIMIT ?");
+    q.addBindValue(comId);
+    q.addBindValue(limit);
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        TrophyPlayerRow r;
+        r.userId = q.value(0).toLongLong();
+        r.npid = q.value(1).toString();
+        r.trophies = q.value(2).toInt();
+        r.lastEarnedAt = q.value(3).toLongLong();
+        out.append(r);
+    }
+    return out;
+}
+
+QList<Database::TrophyProfileRow> Database::ListPlayerTrophySummary(int64_t userId) {
+    QList<TrophyProfileRow> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT t.communication_id, COALESCE(tn.title_name, ''), COUNT(*), "
+              "       MIN(t.earned_at), MAX(t.earned_at) "
+              "FROM user_trophies t "
+              "LEFT JOIN title_name tn ON tn.communication_id = t.communication_id "
+              "WHERE t.user_id = ? "
+              "GROUP BY t.communication_id "
+              "ORDER BY COUNT(*) DESC, t.communication_id ASC");
+    q.addBindValue(static_cast<qlonglong>(userId));
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        TrophyProfileRow r;
+        r.comId = q.value(0).toString();
+        r.titleName = q.value(1).toString();
+        r.trophies = q.value(2).toInt();
+        r.firstEarnedAt = q.value(3).toLongLong();
+        r.lastEarnedAt = q.value(4).toLongLong();
+        out.append(r);
+    }
+    return out;
+}
+
+Database::TrophyTotals Database::GetTrophyTotals() {
+    TrophyTotals t;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT COUNT(DISTINCT user_id), COUNT(DISTINCT communication_id), COUNT(*) "
+              "FROM user_trophies");
+    if (Exec(q) && q.next()) {
+        t.players = q.value(0).toInt();
+        t.games = q.value(1).toInt();
+        t.unlocks = q.value(2).toInt();
+    }
+    return t;
+}
+
 bool Database::DeleteUserTrophy(int64_t userId, const QString& comId, int32_t trophyId) {
     QSqlQuery q(m_db);
     q.prepare("DELETE FROM user_trophies WHERE user_id=? AND communication_id=? AND trophy_id=?");

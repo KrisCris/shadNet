@@ -40,6 +40,8 @@ private:
     QByteArray BuildScoreListJson() const;
     QByteArray BuildVersionJson() const;
     QByteArray BuildTrophyStatsJson(const QString& comId) const;
+    QByteArray BuildTrophyListJson() const;
+    QByteArray BuildTrophyPlayerJson(const QString& npid) const;
 
     ConfigManager* m_config = nullptr;
     ScoreCache* m_scoreCache = nullptr;

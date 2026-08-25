@@ -252,6 +252,35 @@ public:
     QList<TrophyEarnerRow> ListTrophyEarners(const QString& comId);
     int CountTrophyPlayers(const QString& comId);
 
+    // A player ranked by how many trophies they hold in one game.
+    struct TrophyPlayerRow {
+        int64_t userId = 0;
+        QString npid;
+        int trophies = 0;
+        int64_t lastEarnedAt = 0;
+    };
+    // Top trophy holders for a game, most trophies first.
+    QList<TrophyPlayerRow> ListTopTrophyPlayers(const QString& comId, int limit);
+
+    // One game in a player's trophy profile.
+    struct TrophyProfileRow {
+        QString comId;
+        QString titleName;
+        int trophies = 0;
+        int64_t firstEarnedAt = 0;
+        int64_t lastEarnedAt = 0;
+    };
+    // Per-game breakdown for one account, most trophies first.
+    QList<TrophyProfileRow> ListPlayerTrophySummary(int64_t userId);
+
+    // Server-wide trophy totals.
+    struct TrophyTotals {
+        int players = 0; // accounts holding at least one trophy
+        int games = 0;   // games with any trophy activity
+        int unlocks = 0; // total unlock records
+    };
+    TrophyTotals GetTrophyTotals();
+
     // Removes one unlock record.
     bool DeleteUserTrophy(int64_t userId, const QString& comId, int32_t trophyId);
 
