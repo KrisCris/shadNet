@@ -239,6 +239,11 @@ public:
     ErrorType CmdKickoutRoomMember(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetWorldInfoList(StreamExtractor& data, QByteArray& reply);
 
+    // Trophies (cmd_trophy.cpp)
+    ErrorType CmdUnlockTrophy(StreamExtractor& data);
+    ErrorType CmdSyncTrophies(StreamExtractor& data, QByteArray& reply);
+    bool TrophiesEnabled() const;
+
     // Title User Storage (TUS)
     ErrorType CmdTusSetData(StreamExtractor& data);
     ErrorType CmdTusGetData(StreamExtractor& data, QByteArray& reply);

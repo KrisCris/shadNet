@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "admin_api.h"
 
+#include <cmath>
+
 #include <QByteArray>
 #include <QDebug>
 #include <QHostAddress>
@@ -739,6 +741,7 @@ void AdminApiServer::RegisterRoutes() {
 
             QJsonObject removed;
             removed.insert(QStringLiteral("scores"), summary.scores);
+            removed.insert(QStringLiteral("trophies"), summary.trophies);
             removed.insert(QStringLiteral("scoreBlobs"), blobsDeleted);
             removed.insert(QStringLiteral("tusVariables"), summary.tusVariables);
             removed.insert(QStringLiteral("tusData"), summary.tusData);
@@ -1092,6 +1095,121 @@ void AdminApiServer::RegisterRoutes() {
             body.insert(QStringLiteral("removedFromLiveBoard"), cacheUpdated);
             return JsonOk(body);
         });
+
+    // GET /admin/v1/trophies — games with trophy activity, most played first.
+    m_http->route("/admin/v1/trophies", QHttpServerRequest::Method::Get,
+                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+
+                      QJsonArray games;
+                      for (const auto& g : m_db->ListTrophyGames()) {
+                          QJsonObject o;
+                          o.insert(QStringLiteral("comId"), g.comId);
+                          o.insert(QStringLiteral("titleName"), g.titleName);
+                          o.insert(QStringLiteral("players"), g.players);
+                          o.insert(QStringLiteral("trophies"), g.trophies);
+                          o.insert(QStringLiteral("unlocks"), g.unlocks);
+                          games.append(o);
+                      }
+                      QJsonObject body;
+                      body.insert(QStringLiteral("games"), games);
+                      return JsonOk(body);
+                  });
+
+    // GET /admin/v1/trophies/<comId> — earner counts and share, per trophy.
+    m_http->route(
+        "/admin/v1/trophies/<arg>", QHttpServerRequest::Method::Get,
+        [this](const QString& comId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+
+            const int players = m_db->CountTrophyPlayers(comId);
+            QJsonArray trophies;
+            for (const auto& e : m_db->ListTrophyEarners(comId)) {
+                QJsonObject o;
+                o.insert(QStringLiteral("trophyId"), e.trophyId);
+                o.insert(QStringLiteral("earners"), e.earners);
+                o.insert(QStringLiteral("earnedPercent"),
+                         players > 0 ? std::round(e.earners * 10000.0 / players) / 100.0 : 0.0);
+                trophies.append(o);
+            }
+            QJsonObject body;
+            body.insert(QStringLiteral("comId"), comId);
+            body.insert(QStringLiteral("players"), players);
+            body.insert(QStringLiteral("trophies"), trophies);
+            return JsonOk(body);
+        });
+
+    // GET /admin/v1/users/<id>/trophies — everything one account has unlocked.
+    m_http->route("/admin/v1/users/<arg>/trophies", QHttpServerRequest::Method::Get,
+                  [this](qint64 userId, const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+
+                      const auto target = m_db->GetUserRow(userId);
+                      if (!target)
+                          return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                           QStringLiteral("No account has id %1.").arg(userId));
+
+                      QJsonArray trophies;
+                      for (const auto& t : m_db->ListUserTrophies(userId)) {
+                          QJsonObject o;
+                          o.insert(QStringLiteral("comId"), t.comId);
+                          o.insert(QStringLiteral("titleName"), t.titleName);
+                          o.insert(QStringLiteral("trophyId"), t.trophyId);
+                          o.insert(QStringLiteral("earnedAt"), static_cast<qint64>(t.earnedAt));
+                          trophies.append(o);
+                      }
+                      QJsonObject body;
+                      body.insert(QStringLiteral("userId"), userId);
+                      body.insert(QStringLiteral("npid"), target->username);
+                      body.insert(QStringLiteral("trophies"), trophies);
+                      body.insert(QStringLiteral("total"), trophies.size());
+                      return JsonOk(body);
+                  });
+
+    // DELETE /admin/v1/users/<id>/trophies/<comId>/<trophyId>
+    // Revokes one unlock, for a trophy obtained by tampering. The account and
+    // everything else it holds are untouched.
+    m_http->route("/admin/v1/users/<arg>/trophies/<arg>/<arg>", QHttpServerRequest::Method::Delete,
+                  [this](qint64 userId, const QString& comId, qint64 trophyId,
+                         const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+
+                      const auto target = m_db->GetUserRow(userId);
+                      if (!target)
+                          return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                           QStringLiteral("No account has id %1.").arg(userId));
+
+                      if (!m_db->DeleteUserTrophy(userId, comId, static_cast<int32_t>(trophyId))) {
+                          return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                           QStringLiteral("%1 has no trophy %2 in %3.")
+                                               .arg(target->username)
+                                               .arg(trophyId)
+                                               .arg(comId));
+                      }
+
+                      m_db->AddAuditEntry(
+                          session->userId, session->npid, QStringLiteral("revoke_trophy"), userId,
+                          target->username,
+                          QStringLiteral("comId=%1 trophy=%2").arg(comId).arg(trophyId));
+                      qInfo().nospace().noquote()
+                          << "AdminApi: " << session->npid << " revoked trophy " << trophyId
+                          << " in " << comId << " from " << target->username;
+
+                      QJsonObject body;
+                      body.insert(QStringLiteral("deleted"), true);
+                      body.insert(QStringLiteral("npid"), target->username);
+                      body.insert(QStringLiteral("comId"), comId);
+                      body.insert(QStringLiteral("trophyId"), trophyId);
+                      return JsonOk(body);
+                  });
 
     // GET /admin/v1/audit?limit=&offset= — who did what, most recent first.
     m_http->route("/admin/v1/audit", QHttpServerRequest::Method::Get,
