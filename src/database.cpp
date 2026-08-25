@@ -280,6 +280,26 @@ bool Database::Migrate() {
         Exec(ins4);
     }
 
+    // Migration 5: trophy metadata, imported by an operator from a title's
+    // TROP.XML.
+    if (!HasMigration(5)) {
+        Exec("CREATE TABLE IF NOT EXISTS trophy_meta("
+             "  communication_id TEXT    NOT NULL,"
+             "  trophy_id        INTEGER NOT NULL,"
+             "  name             TEXT    NOT NULL,"
+             "  detail           TEXT,"
+             "  grade            TEXT," // B, S, G or P
+             "  hidden           BOOL    NOT NULL DEFAULT 0,"
+             "  group_id         INTEGER NOT NULL DEFAULT 0,"
+             "  language         TEXT," // which TROP_xx.XML it came from
+             "  imported_at      UNSIGNED BIGINT NOT NULL,"
+             "  PRIMARY KEY(communication_id, trophy_id))");
+
+        QSqlQuery ins5(m_db);
+        ins5.prepare("INSERT OR IGNORE INTO migration VALUES(5,'trophy metadata')");
+        Exec(ins5);
+    }
+
     qInfo() << "Database migrations complete";
 
     RunMaintenance();
@@ -1302,6 +1322,101 @@ Database::TrophyTotals Database::GetTrophyTotals() {
         t.unlocks = q.value(2).toInt();
     }
     return t;
+}
+
+bool Database::ImportTrophyMeta(const QString& comId, const QList<TrophyMetaRow>& rows) {
+    if (comId.isEmpty())
+        return false;
+
+    if (!m_db.transaction()) {
+        m_lastError = m_db.lastError().text();
+        qCritical() << "ImportTrophyMeta: cannot start transaction:" << m_lastError;
+        return false;
+    }
+
+    // Clear first so trophies dropped from a corrected file do not linger.
+    QSqlQuery del(m_db);
+    del.prepare("DELETE FROM trophy_meta WHERE communication_id=?");
+    del.addBindValue(comId);
+    if (!Exec(del)) {
+        m_db.rollback();
+        return false;
+    }
+
+    QSqlQuery q(m_db);
+    if (!q.prepare("INSERT INTO trophy_meta(communication_id, trophy_id, name, detail, grade, "
+                   "hidden, group_id, language, imported_at) VALUES(?,?,?,?,?,?,?,?,?)")) {
+        m_lastError = q.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    const qlonglong now = QDateTime::currentSecsSinceEpoch();
+    for (const TrophyMetaRow& r : rows) {
+        q.bindValue(0, comId);
+        q.bindValue(1, r.trophyId);
+        q.bindValue(2, r.name);
+        q.bindValue(3, r.detail);
+        q.bindValue(4, r.grade);
+        q.bindValue(5, r.hidden ? 1 : 0);
+        q.bindValue(6, r.groupId);
+        q.bindValue(7, r.language);
+        q.bindValue(8, now);
+        if (!Exec(q)) {
+            qCritical() << "ImportTrophyMeta: insert failed for trophy" << r.trophyId << ":"
+                        << m_lastError;
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    if (!m_db.commit()) {
+        m_lastError = m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    qInfo() << "ImportTrophyMeta:" << rows.size() << "trophies for" << comId;
+    return true;
+}
+
+QList<Database::TrophyMetaRow> Database::ListTrophyMeta(const QString& comId) {
+    QList<TrophyMetaRow> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT trophy_id, name, COALESCE(detail,''), COALESCE(grade,''), hidden, "
+              "       group_id, COALESCE(language,'') "
+              "FROM trophy_meta WHERE communication_id=? ORDER BY trophy_id ASC");
+    q.addBindValue(comId);
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        TrophyMetaRow r;
+        r.comId = comId;
+        r.trophyId = q.value(0).toInt();
+        r.name = q.value(1).toString();
+        r.detail = q.value(2).toString();
+        r.grade = q.value(3).toString();
+        r.hidden = q.value(4).toBool();
+        r.groupId = q.value(5).toInt();
+        r.language = q.value(6).toString();
+        out.append(r);
+    }
+    return out;
+}
+
+int Database::CountTrophyMeta(const QString& comId) {
+    QSqlQuery q(m_db);
+    q.prepare("SELECT COUNT(*) FROM trophy_meta WHERE communication_id=?");
+    q.addBindValue(comId);
+    return (Exec(q) && q.next()) ? q.value(0).toInt() : 0;
+}
+
+bool Database::DeleteTrophyMeta(const QString& comId) {
+    QSqlQuery q(m_db);
+    q.prepare("DELETE FROM trophy_meta WHERE communication_id=?");
+    q.addBindValue(comId);
+    if (!Exec(q))
+        return false;
+    return q.numRowsAffected() > 0;
 }
 
 bool Database::DeleteUserTrophy(int64_t userId, const QString& comId, int32_t trophyId) {

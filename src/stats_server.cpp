@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include <QDebug>
+#include <QHash>
 #include <QHostAddress>
 #include <QHttpServerRequest>
 #include <QHttpServerResponder>
@@ -269,11 +270,23 @@ QByteArray StatsServer::BuildTrophyStatsJson(const QString& comId) const {
     }
 
     const int players = db.CountTrophyPlayers(comId);
+
+    QHash<int, Database::TrophyMetaRow> meta;
+    for (const auto& m : db.ListTrophyMeta(comId))
+        meta.insert(m.trophyId, m);
+
     QJsonArray trophies;
     int unlocks = 0;
     for (const auto& e : db.ListTrophyEarners(comId)) {
         QJsonObject o;
         o.insert("trophyId", e.trophyId);
+        const auto it = meta.constFind(e.trophyId);
+        if (it != meta.constEnd()) {
+            o.insert("name", it->name);
+            o.insert("detail", it->detail);
+            o.insert("grade", it->grade);
+            o.insert("hidden", it->hidden);
+        }
         o.insert("earners", e.earners);
         o.insert("earnedPercent",
                  players > 0 ? std::round(e.earners * 10000.0 / players) / 100.0 : 0.0);
@@ -281,6 +294,7 @@ QByteArray StatsServer::BuildTrophyStatsJson(const QString& comId) const {
         unlocks += e.earners;
     }
 
+    // Top holders. Capped, because this is a public page and not a user dump.
     QJsonArray top;
     for (const auto& tp : db.ListTopTrophyPlayers(comId, 25)) {
         QJsonObject o;
@@ -304,6 +318,7 @@ QByteArray StatsServer::BuildTrophyStatsJson(const QString& comId) const {
     root.insert("distinctTrophies", trophies.size());
     root.insert("unlocks", unlocks);
     root.insert("trophies", trophies);
+    root.insert("hasTrophyNames", !meta.isEmpty());
     root.insert("topPlayers", top);
     return toJson(root);
 }
@@ -325,6 +340,7 @@ QByteArray StatsServer::BuildTrophyListJson() const {
         o.insert("players", g.players);
         o.insert("distinctTrophies", g.trophies);
         o.insert("unlocks", g.unlocks);
+        o.insert("hasTrophyNames", db.CountTrophyMeta(g.comId) > 0);
         games.append(o);
     }
 
@@ -368,6 +384,7 @@ QByteArray StatsServer::BuildTrophyPlayerJson(const QString& npid) const {
         games.append(o);
         total += g.trophies;
     }
+
     root.insert("npid", db.GetUsername(*userId).value_or(npid));
     root.insert("total", total);
     root.insert("games", games);

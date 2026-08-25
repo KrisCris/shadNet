@@ -281,7 +281,22 @@ public:
     };
     TrophyTotals GetTrophyTotals();
 
-    // Removes one unlock record.
+    // Trophy metadata
+    struct TrophyMetaRow {
+        QString comId;
+        int32_t trophyId = 0;
+        QString name;
+        QString detail;
+        QString grade; // "B", "S", "G" or "P"
+        bool hidden = false;
+        int32_t groupId = 0;
+        QString language; // which TROP_xx.XML it came from; empty for the master
+    };
+
+    bool ImportTrophyMeta(const QString& comId, const QList<TrophyMetaRow>& rows);
+    QList<TrophyMetaRow> ListTrophyMeta(const QString& comId);
+    int CountTrophyMeta(const QString& comId);
+    bool DeleteTrophyMeta(const QString& comId);
     bool DeleteUserTrophy(int64_t userId, const QString& comId, int32_t trophyId);
 
     QString lastError() const {

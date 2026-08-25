@@ -22,6 +22,7 @@
 #include "client_session.h" // SharedState
 #include "score_cache.h"
 #include "score_files.h"
+#include "trophy_config.h"
 #include "version.h"
 
 namespace {
@@ -1140,6 +1141,120 @@ void AdminApiServer::RegisterRoutes() {
             body.insert(QStringLiteral("comId"), comId);
             body.insert(QStringLiteral("players"), players);
             body.insert(QStringLiteral("trophies"), trophies);
+            return JsonOk(body);
+        });
+
+    // POST /admin/v1/trophies/<comId>/config — import a title's TROP.XML.
+    m_http->route(
+        "/admin/v1/trophies/<arg>/config", QHttpServerRequest::Method::Post,
+        [this](const QString& comId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+
+            if (comId.isEmpty() || comId.size() > 12)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("Communication id must be 1-12 characters."));
+
+            const QByteArray body = req.body();
+            if (body.isEmpty())
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("Send the TROP.XML contents as the request body."));
+            // A trophy config is tens of KB; far larger is not one.
+            if (body.size() > 4 * 1024 * 1024)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("That file is too large to be a trophy config."));
+
+            const QUrlQuery query(req.url());
+            const QString language =
+                query.queryItemValue(QStringLiteral("language")).trimmed().left(8);
+
+            const TrophyConfig cfg = ParseTrophyConfig(body, language);
+            if (!cfg.ok())
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 cfg.error);
+            if (!cfg.comId.isEmpty() && cfg.comId.compare(comId, Qt::CaseInsensitive) != 0) {
+                return JsonError(
+                    QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                    QStringLiteral("This file is for %1, not %2.").arg(cfg.comId, comId));
+            }
+
+            if (!m_db->ImportTrophyMeta(comId, cfg.trophies)) {
+                qCritical() << "AdminApi: trophy config import failed for" << comId << ":"
+                            << m_db->lastError();
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The database rejected the import, so nothing was "
+                                                "changed. Check the server log."));
+            }
+            bool titleNamed = false;
+            if (!cfg.titleName.isEmpty())
+                titleNamed = m_db->SetTitleName(comId, cfg.titleName);
+
+            m_db->AddAuditEntry(session->userId, session->npid,
+                                QStringLiteral("import_trophy_config"), 0, comId,
+                                QStringLiteral("trophies=%1 language=%2")
+                                    .arg(cfg.trophies.size())
+                                    .arg(language.isEmpty() ? QStringLiteral("master") : language));
+            qInfo().nospace().noquote() << "AdminApi: " << session->npid << " imported "
+                                        << cfg.trophies.size() << " trophy names for " << comId;
+
+            QJsonObject out;
+            out.insert(QStringLiteral("imported"), true);
+            out.insert(QStringLiteral("comId"), comId);
+            out.insert(QStringLiteral("trophies"), cfg.trophies.size());
+            out.insert(QStringLiteral("titleName"), cfg.titleName);
+            out.insert(QStringLiteral("titleNameApplied"), titleNamed);
+            return JsonOk(out);
+        });
+
+    // GET /admin/v1/trophies/<comId>/config — what names are on record.
+    m_http->route(
+        "/admin/v1/trophies/<arg>/config", QHttpServerRequest::Method::Get,
+        [this](const QString& comId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+
+            QJsonArray trophies;
+            for (const auto& m : m_db->ListTrophyMeta(comId)) {
+                QJsonObject o;
+                o.insert(QStringLiteral("trophyId"), m.trophyId);
+                o.insert(QStringLiteral("name"), m.name);
+                o.insert(QStringLiteral("detail"), m.detail);
+                o.insert(QStringLiteral("grade"), m.grade);
+                o.insert(QStringLiteral("hidden"), m.hidden);
+                o.insert(QStringLiteral("groupId"), m.groupId);
+                o.insert(QStringLiteral("language"), m.language);
+                trophies.append(o);
+            }
+            QJsonObject body;
+            body.insert(QStringLiteral("comId"), comId);
+            body.insert(QStringLiteral("trophies"), trophies);
+            body.insert(QStringLiteral("total"), trophies.size());
+            return JsonOk(body);
+        });
+
+    // DELETE /admin/v1/trophies/<comId>/config — forget a title's names. Earned
+    // trophies are untouched; only the labels go.
+    m_http->route(
+        "/admin/v1/trophies/<arg>/config", QHttpServerRequest::Method::Delete,
+        [this](const QString& comId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+
+            if (!m_db->DeleteTrophyMeta(comId))
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("No trophy names are stored for %1.").arg(comId));
+
+            m_db->AddAuditEntry(session->userId, session->npid,
+                                QStringLiteral("clear_trophy_config"), 0, comId, QString());
+            qInfo().nospace().noquote()
+                << "AdminApi: " << session->npid << " cleared trophy names for " << comId;
+
+            QJsonObject body;
+            body.insert(QStringLiteral("deleted"), true);
+            body.insert(QStringLiteral("comId"), comId);
             return JsonOk(body);
         });
 
