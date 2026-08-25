@@ -70,7 +70,7 @@ ErrorType ClientSession::CmdSyncTrophies(StreamExtractor& data, QByteArray& repl
     }
     if (req.trophies_size() > MaxTrophiesPerSync) {
         qWarning() << "SyncTrophies:" << req.trophies_size() << "entries from" << m_info.npid
-                   << "exceeds the" << kMaxTrophiesPerSync << "cap";
+                   << "exceeds the" << MaxTrophiesPerSync << "cap";
         return ErrorType::InvalidInput;
     }
 
