@@ -58,6 +58,8 @@ struct AdminUserRow {
     int64_t banTimestamp = 0; // seconds since epoch, 0 when never banned
     int64_t creation = 0;     // seconds since epoch, 0 when unknown
     int64_t lastLogin = 0;    // seconds since epoch, 0 when never logged in
+    QString clientVersion;
+    int64_t clientVersionAt = 0;
 };
 
 // Which accounts ListUsers/CountUsers should return.
@@ -65,7 +67,10 @@ enum class UserFilter {
     All,
     BannedOnly,
     AdminsOnly,
-    ActiveOnly, // not banned
+    ActiveOnly,   // not banned
+    WithScores,   // has posted at least one leaderboard score
+    WithTrophies, // has unlocked at least one trophy
+    OnlineOnly,   // currently connected
 };
 
 // One entry of the admin action log.
@@ -136,6 +141,7 @@ public:
     // Removes the account row itself along with everything PurgeUserData covers
     bool DeleteAccount(int64_t userId, PurgeSummary& summary);
     bool SetAdmin(int64_t userId, bool admin);
+    bool SetClientVersion(int64_t userId, const QString& version);
 
     // Replaces an account's password. Generates a fresh salt, and rotates the
     // account token so any client still holding the old one has to sign in again —
@@ -148,8 +154,11 @@ public:
     // and data slots, and friend/block relationships.
     bool PurgeUserData(int64_t userId, PurgeSummary& summary);
 
-    QList<AdminUserRow> ListUsers(const QString& search, UserFilter filter, int limit, int offset);
-    int CountUsers(const QString& search, UserFilter filter);
+    QList<AdminUserRow> ListUsers(
+        const QString& search, UserFilter filter, int limit, int offset,
+        const std::optional<QList<int64_t>>& restrictToIds = std::nullopt);
+    int CountUsers(const QString& search, UserFilter filter,
+                   const std::optional<QList<int64_t>>& restrictToIds = std::nullopt);
     std::optional<AdminUserRow> GetUserRow(int64_t userId);
     int CountUsersWhere(UserFilter filter);
 
@@ -309,8 +318,10 @@ private:
     bool HasMigration(int id);
     bool PurgeUserDataStatements(int64_t userId, PurgeSummary& summary);
     void CollectScoreDataIds(int64_t userId, PurgeSummary& summary);
-    static QString BuildUserFilterClause(const QString& search, UserFilter filter);
-    static void BindUserFilter(QSqlQuery& q, const QString& search);
+    static QString BuildUserFilterClause(const QString& search, UserFilter filter,
+                                         const std::optional<QList<int64_t>>& restrictToIds);
+    static void BindUserFilter(QSqlQuery& q, const QString& search,
+                               const std::optional<QList<int64_t>>& restrictToIds);
     QByteArray HashPassword(const QString& password, const QByteArray& salt);
     QByteArray GenerateSalt(int bytes = 64);
     QString GenerateToken(int len = 16);

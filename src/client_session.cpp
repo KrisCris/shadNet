@@ -292,6 +292,8 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdTusTryAndSetVariable(se, reply);
     case CommandType::TusGetFriendsVariable:
         return CmdTusGetFriendsVariable(se, reply);
+    case CommandType::SetClientVersion:
+        return CmdSetClientVersion(se);
     case CommandType::UnlockTrophy:
         return CmdUnlockTrophy(se);
     case CommandType::SyncTrophies:
@@ -302,6 +304,28 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         qWarning() << "Unknown command" << static_cast<uint16_t>(cmd);
         return ErrorType::Invalid;
     }
+}
+
+ErrorType ClientSession::CmdSetClientVersion(StreamExtractor& data) {
+    shadnet::SetClientVersionRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+    constexpr int MaxClientVersionLength = 256;
+    QString version = QString::fromStdString(req.version()).simplified();
+    version.removeIf([](QChar c) { return c.category() == QChar::Other_Control; });
+    if (version.size() > MaxClientVersionLength) {
+        // Mark it, so a clipped value is never mistaken for what the client sent.
+        version = version.left(MaxClientVersionLength - 1) + QChar(0x2026);
+    }
+
+    if (!m_db->SetClientVersion(m_info.userId, version)) {
+        qCritical() << "SetClientVersion: DB error for" << m_info.npid;
+        return ErrorType::DbFail;
+    }
+
+    qInfo().nospace().noquote() << "SetClientVersion: " << m_info.npid << " is running "
+                                << (version.isEmpty() ? QStringLiteral("(cleared)") : version);
+    return ErrorType::NoError;
 }
 
 ErrorType ClientSession::CmdGetServerFeatures(QByteArray& reply) {

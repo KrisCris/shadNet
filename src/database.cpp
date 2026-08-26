@@ -300,6 +300,16 @@ bool Database::Migrate() {
         Exec(ins5);
     }
 
+    // Migration 6
+    if (!HasMigration(6)) {
+        Exec("ALTER TABLE account ADD COLUMN client_version TEXT");
+        Exec("ALTER TABLE account ADD COLUMN client_version_at UNSIGNED BIGINT");
+
+        QSqlQuery ins6(m_db);
+        ins6.prepare("INSERT OR IGNORE INTO migration VALUES(6,'client version')");
+        Exec(ins6);
+    }
+
     qInfo() << "Database migrations complete";
 
     RunMaintenance();
@@ -615,7 +625,8 @@ bool Database::BanUser(int64_t userId, bool ban, const QString& reason) {
     return q.numRowsAffected() > 0;
 }
 
-QString Database::BuildUserFilterClause(const QString& search, UserFilter filter) {
+QString Database::BuildUserFilterClause(const QString& search, UserFilter filter,
+                                        const std::optional<QList<int64_t>>& restrictToIds) {
     QStringList clauses;
     switch (filter) {
     case UserFilter::BannedOnly:
@@ -627,37 +638,62 @@ QString Database::BuildUserFilterClause(const QString& search, UserFilter filter
     case UserFilter::ActiveOnly:
         clauses << "a.banned = 0";
         break;
+    case UserFilter::WithScores:
+        clauses << "EXISTS (SELECT 1 FROM score s WHERE s.user_id = a.user_id)";
+        break;
+    case UserFilter::WithTrophies:
+        clauses << "EXISTS (SELECT 1 FROM user_trophies t WHERE t.user_id = a.user_id)";
+        break;
+    case UserFilter::OnlineOnly:
+        break;
     case UserFilter::All:
         break;
     }
+
     if (!search.isEmpty()) {
-        // ESCAPE keeps a literal % or _ in the search box from turning into a wildcard.
         clauses << "(a.username LIKE ? ESCAPE '\\' OR a.email LIKE ? ESCAPE '\\')";
+    }
+    if (restrictToIds) {
+        if (restrictToIds->isEmpty()) {
+            clauses << "0";
+        } else {
+            QStringList placeholders;
+            for (int i = 0; i < restrictToIds->size(); ++i)
+                placeholders << QStringLiteral("?");
+            clauses << QStringLiteral("a.user_id IN (%1)").arg(placeholders.join(QLatin1Char(',')));
+        }
     }
     return clauses.isEmpty() ? QString() : QStringLiteral(" WHERE ") + clauses.join(" AND ");
 }
 
-void Database::BindUserFilter(QSqlQuery& q, const QString& search) {
-    if (search.isEmpty())
-        return;
-    QString escaped = search;
-    escaped.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
-    const QString pattern = QStringLiteral("%%%1%%").arg(escaped);
-    q.addBindValue(pattern);
-    q.addBindValue(pattern);
+void Database::BindUserFilter(QSqlQuery& q, const QString& search,
+                              const std::optional<QList<int64_t>>& restrictToIds) {
+    if (!search.isEmpty()) {
+        QString escaped = search;
+        escaped.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        const QString pattern = QStringLiteral("%%%1%%").arg(escaped);
+        q.addBindValue(pattern);
+        q.addBindValue(pattern);
+    }
+    if (restrictToIds) {
+        for (int64_t id : *restrictToIds)
+            q.addBindValue(static_cast<qlonglong>(id));
+    }
 }
 
 QList<AdminUserRow> Database::ListUsers(const QString& search, UserFilter filter, int limit,
-                                        int offset) {
+                                        int offset,
+                                        const std::optional<QList<int64_t>>& restrictToIds) {
     QList<AdminUserRow> rows;
     if (limit <= 0)
         return rows;
 
     const QString sql =
         QStringLiteral("SELECT a.user_id, a.username, a.email, a.admin, a.stat_agent, a.banned, "
-                       "a.ban_reason, a.ban_timestamp, t.creation, t.last_login "
+                       "a.ban_reason, a.ban_timestamp, t.creation, t.last_login, "
+                       "COALESCE(a.client_version,''), COALESCE(a.client_version_at,0) "
                        "FROM account a LEFT JOIN account_timestamp t ON t.user_id = a.user_id") +
-        BuildUserFilterClause(search, filter) +
+        BuildUserFilterClause(search, filter, restrictToIds) +
         QStringLiteral(" ORDER BY a.user_id ASC LIMIT ? OFFSET ?");
 
     QSqlQuery q(m_db);
@@ -666,7 +702,7 @@ QList<AdminUserRow> Database::ListUsers(const QString& search, UserFilter filter
         qWarning() << "ListUsers: prepare failed:" << m_lastError;
         return rows;
     }
-    BindUserFilter(q, search);
+    BindUserFilter(q, search, restrictToIds);
     q.addBindValue(limit);
     q.addBindValue(qMax(0, offset));
     if (!Exec(q)) {
@@ -686,20 +722,23 @@ QList<AdminUserRow> Database::ListUsers(const QString& search, UserFilter filter
         r.banTimestamp = q.value(7).toLongLong();
         r.creation = q.value(8).toLongLong();
         r.lastLogin = q.value(9).toLongLong();
+        r.clientVersion = q.value(10).toString();
+        r.clientVersionAt = q.value(11).toLongLong();
         rows.append(r);
     }
     return rows;
 }
 
-int Database::CountUsers(const QString& search, UserFilter filter) {
-    const QString sql =
-        QStringLiteral("SELECT COUNT(*) FROM account a") + BuildUserFilterClause(search, filter);
+int Database::CountUsers(const QString& search, UserFilter filter,
+                         const std::optional<QList<int64_t>>& restrictToIds) {
+    const QString sql = QStringLiteral("SELECT COUNT(*) FROM account a") +
+                        BuildUserFilterClause(search, filter, restrictToIds);
     QSqlQuery q(m_db);
     if (!q.prepare(sql)) {
         m_lastError = q.lastError().text();
         return 0;
     }
-    BindUserFilter(q, search);
+    BindUserFilter(q, search, restrictToIds);
     return (Exec(q) && q.next()) ? q.value(0).toInt() : 0;
 }
 
@@ -710,7 +749,8 @@ int Database::CountUsersWhere(UserFilter filter) {
 std::optional<AdminUserRow> Database::GetUserRow(int64_t userId) {
     QSqlQuery q(m_db);
     q.prepare("SELECT a.user_id, a.username, a.email, a.admin, a.stat_agent, a.banned, "
-              "a.ban_reason, a.ban_timestamp, t.creation, t.last_login "
+              "a.ban_reason, a.ban_timestamp, t.creation, t.last_login, "
+              "COALESCE(a.client_version,''), COALESCE(a.client_version_at,0) "
               "FROM account a LEFT JOIN account_timestamp t ON t.user_id = a.user_id "
               "WHERE a.user_id = ?");
     q.addBindValue(static_cast<qlonglong>(userId));
@@ -728,6 +768,8 @@ std::optional<AdminUserRow> Database::GetUserRow(int64_t userId) {
     r.banTimestamp = q.value(7).toLongLong();
     r.creation = q.value(8).toLongLong();
     r.lastLogin = q.value(9).toLongLong();
+    r.clientVersion = q.value(10).toString();
+    r.clientVersionAt = q.value(11).toLongLong();
     return r;
 }
 
@@ -797,6 +839,17 @@ bool Database::SetPassword(int64_t userId, const QString& newPassword) {
     q.addBindValue(hash);
     q.addBindValue(salt);
     q.addBindValue(GenerateToken());
+    q.addBindValue(static_cast<qlonglong>(userId));
+    if (!Exec(q))
+        return false;
+    return q.numRowsAffected() > 0;
+}
+
+bool Database::SetClientVersion(int64_t userId, const QString& version) {
+    QSqlQuery q(m_db);
+    q.prepare("UPDATE account SET client_version=?, client_version_at=? WHERE user_id=?");
+    q.addBindValue(version.isEmpty() ? QVariant() : QVariant(version));
+    q.addBindValue(version.isEmpty() ? QVariant() : QVariant(QDateTime::currentSecsSinceEpoch()));
     q.addBindValue(static_cast<qlonglong>(userId));
     if (!Exec(q))
         return false;

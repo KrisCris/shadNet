@@ -91,12 +91,19 @@ std::optional<QJsonObject> ParseJsonBody(const QHttpServerRequest& req, QString&
 }
 
 UserFilter ParseFilter(const QString& raw) {
-    if (raw.compare(QStringLiteral("banned"), Qt::CaseInsensitive) == 0)
+    const QString f = raw.toLower();
+    if (f == QLatin1String("banned"))
         return UserFilter::BannedOnly;
-    if (raw.compare(QStringLiteral("admins"), Qt::CaseInsensitive) == 0)
+    if (f == QLatin1String("admins"))
         return UserFilter::AdminsOnly;
-    if (raw.compare(QStringLiteral("active"), Qt::CaseInsensitive) == 0)
+    if (f == QLatin1String("active"))
         return UserFilter::ActiveOnly;
+    if (f == QLatin1String("online"))
+        return UserFilter::OnlineOnly;
+    if (f == QLatin1String("scores"))
+        return UserFilter::WithScores;
+    if (f == QLatin1String("trophies"))
+        return UserFilter::WithTrophies;
     return UserFilter::All;
 }
 
@@ -409,6 +416,8 @@ QJsonObject AdminApiServer::UserRowToJson(const AdminUserRow& row) const {
     o.insert(QStringLiteral("banTimestamp"), static_cast<qint64>(row.banTimestamp));
     o.insert(QStringLiteral("creation"), static_cast<qint64>(row.creation));
     o.insert(QStringLiteral("lastLogin"), static_cast<qint64>(row.lastLogin));
+    o.insert(QStringLiteral("clientVersion"), row.clientVersion);
+    o.insert(QStringLiteral("clientVersionAt"), static_cast<qint64>(row.clientVersionAt));
     o.insert(QStringLiteral("online"), IsOnline(row.userId));
     return o;
 }
@@ -556,39 +565,52 @@ void AdminApiServer::RegisterRoutes() {
                   });
 
     // GET /admin/v1/users?search=&filter=&limit=&offset=
-    m_http->route("/admin/v1/users", QHttpServerRequest::Method::Get,
-                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
-                      const auto session = Authenticate(req);
-                      if (!session)
-                          return AuthError(req);
+    m_http->route(
+        "/admin/v1/users", QHttpServerRequest::Method::Get,
+        [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
 
-                      const QUrlQuery query(req.url());
-                      const QString search =
-                          query.queryItemValue(QStringLiteral("search")).trimmed();
-                      const UserFilter filter =
-                          ParseFilter(query.queryItemValue(QStringLiteral("filter")));
+            const QUrlQuery query(req.url());
+            const QString search = query.queryItemValue(QStringLiteral("search")).trimmed();
+            const UserFilter filter = ParseFilter(query.queryItemValue(QStringLiteral("filter")));
 
-                      bool ok = false;
-                      int limit = query.queryItemValue(QStringLiteral("limit")).toInt(&ok);
-                      if (!ok)
-                          limit = 100;
-                      limit = qBound(1, limit, 500);
-                      int offset = query.queryItemValue(QStringLiteral("offset")).toInt(&ok);
-                      if (!ok || offset < 0)
-                          offset = 0;
+            bool ok = false;
+            int limit = query.queryItemValue(QStringLiteral("limit")).toInt(&ok);
+            if (!ok)
+                limit = 100;
+            limit = qBound(1, limit, 500);
+            int offset = query.queryItemValue(QStringLiteral("offset")).toInt(&ok);
+            if (!ok || offset < 0)
+                offset = 0;
 
-                      QJsonArray users;
-                      const auto rows = m_db->ListUsers(search, filter, limit, offset);
-                      for (const AdminUserRow& row : rows)
-                          users.append(UserRowToJson(row));
+            QJsonArray users;
+            std::optional<QList<int64_t>> restrictToIds;
+            if (filter == UserFilter::OnlineOnly) {
+                QList<int64_t> online;
+                if (m_shared) {
+                    QReadLocker lk(&m_shared->clientsLock);
+                    online.reserve(m_shared->clients.size());
+                    for (auto it = m_shared->clients.constBegin();
+                         it != m_shared->clients.constEnd(); ++it) {
+                        online.append(it.key());
+                    }
+                }
+                restrictToIds = online;
+            }
 
-                      QJsonObject body;
-                      body.insert(QStringLiteral("users"), users);
-                      body.insert(QStringLiteral("total"), m_db->CountUsers(search, filter));
-                      body.insert(QStringLiteral("limit"), limit);
-                      body.insert(QStringLiteral("offset"), offset);
-                      return JsonOk(body);
-                  });
+            const auto rows = m_db->ListUsers(search, filter, limit, offset, restrictToIds);
+            for (const AdminUserRow& row : rows)
+                users.append(UserRowToJson(row));
+
+            QJsonObject body;
+            body.insert(QStringLiteral("users"), users);
+            body.insert(QStringLiteral("total"), m_db->CountUsers(search, filter, restrictToIds));
+            body.insert(QStringLiteral("limit"), limit);
+            body.insert(QStringLiteral("offset"), offset);
+            return JsonOk(body);
+        });
 
     // GET /admin/v1/users/<id>
     m_http->route("/admin/v1/users/<arg>", QHttpServerRequest::Method::Get,

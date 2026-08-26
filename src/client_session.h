@@ -220,6 +220,7 @@ public:
     ErrorType CmdGetScoreGameDataByAccId(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetToken(QByteArray& reply);
     ErrorType CmdGetServerFeatures(QByteArray& reply);
+    ErrorType CmdSetClientVersion(StreamExtractor& data);
 
     // commands cmd_matching.cpp
     ErrorType CmdContextStart(StreamExtractor& data);

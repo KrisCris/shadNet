@@ -32,6 +32,7 @@ enum class CommandType : uint16_t {
     AddBlock = 10,
     RemoveBlock = 11,
     GetServerFeatures = 12,
+    SetClientVersion = 13,
     // Scores
     GetBoardInfos = 30,
     RecordScore = 31,
