@@ -200,6 +200,7 @@ public:
     ErrorType CmdCreate(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdLogin(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdDelete(StreamExtractor& data);
+    ErrorType CmdLookupOnlineId(StreamExtractor& data, QByteArray& reply);
 
     // commands cmd_friend.cpp
     ErrorType CmdAddFriend(StreamExtractor& data);

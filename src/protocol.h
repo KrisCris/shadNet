@@ -46,6 +46,8 @@ enum class CommandType : uint16_t {
     GetToken = 39,
     // Presence: mid-session Appear-Offline toggle (payload: SetAppearOfflineRequest).
     SetAppearOffline = 40,
+    // Global online ID  to account ID resolution
+    LookupOnlineId = 41,
     // Matchmaking
     ContextStart = 100,
     CreateRoom = 101,

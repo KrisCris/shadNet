@@ -284,3 +284,34 @@ ErrorType ClientSession::CmdGetToken(QByteArray& reply) {
     qInfo() << "CmdGetToken: served token for" << m_info.npid;
     return ErrorType::NoError;
 }
+
+// LookupOnlineId
+// Request:  u32LE blob size + LookupOnlineIdRequest proto
+// Reply:    ErrorType(u8) + u32LE blob size + LookupOnlineIdReply proto
+//
+// Global online ID to account ID resolution
+ErrorType ClientSession::CmdLookupOnlineId(StreamExtractor& data, QByteArray& reply) {
+    shadnet::LookupOnlineIdRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    const QString npid = QString::fromStdString(req.npid());
+    if (!IsValidNpid(npid))
+        return ErrorType::InvalidInput;
+
+    const auto userId = m_db->GetUserId(npid);
+    if (!userId.has_value()) {
+        qInfo() << "CmdLookupOnlineId:" << npid << "-> not found";
+        return ErrorType::NotFound;
+    }
+
+    const QString canonicalNpid = m_db->GetUsername(*userId).value_or(npid);
+
+    shadnet::LookupOnlineIdReply pb;
+    pb.set_account_id(static_cast<uint64_t>(*userId));
+    pb.set_npid(canonicalNpid.toStdString());
+    appendProto(reply, pb);
+
+    qInfo() << "CmdLookupOnlineId:" << canonicalNpid << "->" << *userId;
+    return ErrorType::NoError;
+}

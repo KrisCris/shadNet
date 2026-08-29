@@ -267,6 +267,8 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdGetScoreGameDataByAccId(se, reply);
     case CommandType::GetToken:
         return CmdGetToken(reply);
+    case CommandType::LookupOnlineId:
+        return CmdLookupOnlineId(se, reply);
         // Title User Storage (TUS)
     case CommandType::TusSetData:
         return CmdTusSetData(se);
