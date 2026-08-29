@@ -1134,6 +1134,8 @@ void AdminApiServer::RegisterRoutes() {
                           o.insert(QStringLiteral("players"), g.players);
                           o.insert(QStringLiteral("trophies"), g.trophies);
                           o.insert(QStringLiteral("unlocks"), g.unlocks);
+                          o.insert(QStringLiteral("hasTrophyNames"),
+                                   m_db->CountTrophyMeta(g.comId) > 0);
                           games.append(o);
                       }
                       QJsonObject body;
