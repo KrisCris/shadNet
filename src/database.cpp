@@ -1035,6 +1035,58 @@ bool Database::SetTitleName(const QString& comId, const QString& titleName) {
     return Exec(q);
 }
 
+QList<Database::KnownTitleRow> Database::ListKnownTitles() {
+    QList<KnownTitleRow> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT c.cid, COALESCE(tn.title_name, ''), "
+              "  EXISTS(SELECT 1 FROM score s WHERE s.communication_id = c.cid), "
+              "  EXISTS(SELECT 1 FROM user_trophies t WHERE t.communication_id = c.cid), "
+              "  EXISTS(SELECT 1 FROM trophy_meta m WHERE m.communication_id = c.cid) "
+              "FROM ("
+              "  SELECT communication_id AS cid FROM title_name "
+              "  UNION SELECT communication_id FROM score "
+              "  UNION SELECT communication_id FROM user_trophies "
+              "  UNION SELECT communication_id FROM trophy_meta"
+              ") c "
+              "LEFT JOIN title_name tn ON tn.communication_id = c.cid "
+              "WHERE c.cid IS NOT NULL AND c.cid <> '' "
+              "ORDER BY c.cid ASC");
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        KnownTitleRow r;
+        r.comId = q.value(0).toString();
+        r.titleName = q.value(1).toString();
+        r.hasScores = q.value(2).toBool();
+        r.hasTrophies = q.value(3).toBool();
+        r.hasTrophyNames = q.value(4).toBool();
+        out.append(r);
+    }
+    return out;
+}
+
+bool Database::RenameTitle(const QString& comId, const QString& titleName) {
+    if (comId.isEmpty() || titleName.isEmpty())
+        return false;
+    QSqlQuery q(m_db);
+    q.prepare("INSERT INTO title_name(communication_id, title_name) VALUES(?, ?) "
+              "ON CONFLICT(communication_id) DO UPDATE SET title_name = excluded.title_name");
+    q.addBindValue(comId);
+    q.addBindValue(titleName);
+    return Exec(q);
+}
+
+bool Database::ClearTitleName(const QString& comId) {
+    if (comId.isEmpty())
+        return false;
+    QSqlQuery q(m_db);
+    q.prepare("DELETE FROM title_name WHERE communication_id=?");
+    q.addBindValue(comId);
+    if (!Exec(q))
+        return false;
+    return q.numRowsAffected() > 0;
+}
+
 std::optional<QString> Database::GetTitleName(const QString& comId) {
     if (comId.isEmpty())
         return std::nullopt;

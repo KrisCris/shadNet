@@ -1119,6 +1119,105 @@ void AdminApiServer::RegisterRoutes() {
             return JsonOk(body);
         });
 
+    // GET /admin/v1/titles — every communication id the server knows, named or not.
+    m_http->route("/admin/v1/titles", QHttpServerRequest::Method::Get,
+                  [this](const QHttpServerRequest& req) -> QHttpServerResponse {
+                      const auto session = Authenticate(req);
+                      if (!session)
+                          return AuthError(req);
+
+                      QJsonArray titles;
+                      int unnamed = 0;
+                      for (const auto& t : m_db->ListKnownTitles()) {
+                          QJsonObject o;
+                          o.insert(QStringLiteral("comId"), t.comId);
+                          o.insert(QStringLiteral("titleName"), t.titleName);
+                          o.insert(QStringLiteral("hasScores"), t.hasScores);
+                          o.insert(QStringLiteral("hasTrophies"), t.hasTrophies);
+                          o.insert(QStringLiteral("hasTrophyNames"), t.hasTrophyNames);
+                          titles.append(o);
+                          if (t.titleName.isEmpty())
+                              ++unnamed;
+                      }
+                      QJsonObject body;
+                      body.insert(QStringLiteral("titles"), titles);
+                      body.insert(QStringLiteral("total"), titles.size());
+                      body.insert(QStringLiteral("unnamed"), unnamed);
+                      return JsonOk(body);
+                  });
+
+    // PUT /admin/v1/titles/<comId> — { name } names or renames a game.
+    m_http->route(
+        "/admin/v1/titles/<arg>", QHttpServerRequest::Method::Put,
+        [this](const QString& comId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+
+            if (comId.isEmpty() || comId.size() > 16)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("Communication id must be 1-16 characters."));
+
+            QString parseError;
+            const auto bodyOpt = ParseJsonBody(req, parseError);
+            if (!bodyOpt)
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 parseError);
+            QString name = bodyOpt->value(QStringLiteral("name")).toString().simplified();
+            name.removeIf([](QChar c) { return c.category() == QChar::Other_Control; });
+            name = name.left(128);
+
+            if (name.isEmpty())
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 QStringLiteral("Give the game a name, or send DELETE to "
+                                                "remove the one it has."));
+
+            const auto previous = m_db->GetTitleName(comId);
+            if (!m_db->RenameTitle(comId, name)) {
+                qCritical() << "AdminApi: rename failed for" << comId << ":" << m_db->lastError();
+                return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
+                                 QStringLiteral("The database rejected the change. "
+                                                "Check the server log."));
+            }
+
+            m_db->AddAuditEntry(session->userId, session->npid, QStringLiteral("rename_title"), 0,
+                                comId,
+                                previous && !previous->isEmpty()
+                                    ? QStringLiteral("\"%1\" -> \"%2\"").arg(*previous, name)
+                                    : QStringLiteral("named \"%1\"").arg(name));
+            qInfo().nospace().noquote()
+                << "AdminApi: " << session->npid << " named " << comId << " \"" << name << "\"";
+
+            QJsonObject body;
+            body.insert(QStringLiteral("comId"), comId);
+            body.insert(QStringLiteral("titleName"), name);
+            body.insert(QStringLiteral("previousName"), previous.value_or(QString()));
+            return JsonOk(body);
+        });
+
+    // DELETE /admin/v1/titles/<comId> — forget a name; the id shows through again.
+    m_http->route(
+        "/admin/v1/titles/<arg>", QHttpServerRequest::Method::Delete,
+        [this](const QString& comId, const QHttpServerRequest& req) -> QHttpServerResponse {
+            const auto session = Authenticate(req);
+            if (!session)
+                return AuthError(req);
+
+            if (!m_db->ClearTitleName(comId))
+                return JsonError(QHttpServerResponse::StatusCode::NotFound, ERR_NOT_FOUND,
+                                 QStringLiteral("%1 has no name stored.").arg(comId));
+
+            m_db->AddAuditEntry(session->userId, session->npid, QStringLiteral("clear_title"), 0,
+                                comId, QString());
+            qInfo().nospace().noquote()
+                << "AdminApi: " << session->npid << " cleared the name for " << comId;
+
+            QJsonObject body;
+            body.insert(QStringLiteral("comId"), comId);
+            body.insert(QStringLiteral("cleared"), true);
+            return JsonOk(body);
+        });
+
     // GET /admin/v1/trophies — games with trophy activity, most played first.
     m_http->route("/admin/v1/trophies", QHttpServerRequest::Method::Get,
                   [this](const QHttpServerRequest& req) -> QHttpServerResponse {

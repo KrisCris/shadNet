@@ -192,6 +192,18 @@ public:
     };
     QList<GameTitleRow> ListScoredGameTitles();
 
+    // Game titles
+    struct KnownTitleRow {
+        QString comId;
+        QString titleName;
+        bool hasScores = false;
+        bool hasTrophies = false;
+        bool hasTrophyNames = false;
+    };
+    QList<KnownTitleRow> ListKnownTitles();
+    bool RenameTitle(const QString& comId, const QString& titleName);
+    bool ClearTitleName(const QString& comId);
+
     // Leaderboard moderation
     // One board that currently holds scores.
     struct BoardRow {
