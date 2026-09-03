@@ -271,6 +271,15 @@ public:
     QList<TrophyGameRow> ListTrophyGames();
     // Earner counts per trophy for one game — the input to "earned by X%".
     QList<TrophyEarnerRow> ListTrophyEarners(const QString& comId);
+
+    struct TrophySetShape {
+        int total = 0;
+        int bronze = 0;
+        int silver = 0;
+        int gold = 0;
+        int platinum = 0;
+    };
+    TrophySetShape GetTrophySetShape(const QString& comId);
     int CountTrophyPlayers(const QString& comId);
 
     // A player ranked by how many trophies they hold in one game.
@@ -290,6 +299,12 @@ public:
         int trophies = 0;
         int64_t firstEarnedAt = 0;
         int64_t lastEarnedAt = 0;
+        int bronze = 0;
+        int silver = 0;
+        int gold = 0;
+        int platinum = 0;
+        int unknownGrade = 0;
+        int totalInGame = 0;
     };
     // Per-game breakdown for one account, most trophies first.
     QList<TrophyProfileRow> ListPlayerTrophySummary(int64_t userId);

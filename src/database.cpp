@@ -1356,6 +1356,26 @@ QList<Database::TrophyEarnerRow> Database::ListTrophyEarners(const QString& comI
     return out;
 }
 
+Database::TrophySetShape Database::GetTrophySetShape(const QString& comId) {
+    TrophySetShape shape;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT COUNT(*), "
+              "  SUM(CASE WHEN grade='B' THEN 1 ELSE 0 END), "
+              "  SUM(CASE WHEN grade='S' THEN 1 ELSE 0 END), "
+              "  SUM(CASE WHEN grade='G' THEN 1 ELSE 0 END), "
+              "  SUM(CASE WHEN grade='P' THEN 1 ELSE 0 END) "
+              "FROM trophy_meta WHERE communication_id = ?");
+    q.addBindValue(comId);
+    if (Exec(q) && q.next()) {
+        shape.total = q.value(0).toInt();
+        shape.bronze = q.value(1).toInt();
+        shape.silver = q.value(2).toInt();
+        shape.gold = q.value(3).toInt();
+        shape.platinum = q.value(4).toInt();
+    }
+    return shape;
+}
+
 int Database::CountTrophyPlayers(const QString& comId) {
     QSqlQuery q(m_db);
     q.prepare("SELECT COUNT(DISTINCT user_id) FROM user_trophies WHERE communication_id = ?");
@@ -1395,9 +1415,18 @@ QList<Database::TrophyProfileRow> Database::ListPlayerTrophySummary(int64_t user
     QList<TrophyProfileRow> out;
     QSqlQuery q(m_db);
     q.prepare("SELECT t.communication_id, COALESCE(tn.title_name, ''), COUNT(*), "
-              "       MIN(t.earned_at), MAX(t.earned_at) "
+              "       MIN(t.earned_at), MAX(t.earned_at), "
+              "       SUM(CASE WHEN m.grade='B' THEN 1 ELSE 0 END), "
+              "       SUM(CASE WHEN m.grade='S' THEN 1 ELSE 0 END), "
+              "       SUM(CASE WHEN m.grade='G' THEN 1 ELSE 0 END), "
+              "       SUM(CASE WHEN m.grade='P' THEN 1 ELSE 0 END), "
+              "       SUM(CASE WHEN m.grade IS NULL OR m.grade='' THEN 1 ELSE 0 END), "
+              "       (SELECT COUNT(*) FROM trophy_meta mm "
+              "        WHERE mm.communication_id = t.communication_id) "
               "FROM user_trophies t "
               "LEFT JOIN title_name tn ON tn.communication_id = t.communication_id "
+              "LEFT JOIN trophy_meta m ON m.communication_id = t.communication_id "
+              "                       AND m.trophy_id = t.trophy_id "
               "WHERE t.user_id = ? "
               "GROUP BY t.communication_id "
               "ORDER BY COUNT(*) DESC, t.communication_id ASC");
@@ -1411,6 +1440,12 @@ QList<Database::TrophyProfileRow> Database::ListPlayerTrophySummary(int64_t user
         r.trophies = q.value(2).toInt();
         r.firstEarnedAt = q.value(3).toLongLong();
         r.lastEarnedAt = q.value(4).toLongLong();
+        r.bronze = q.value(5).toInt();
+        r.silver = q.value(6).toInt();
+        r.gold = q.value(7).toInt();
+        r.platinum = q.value(8).toInt();
+        r.unknownGrade = q.value(9).toInt();
+        r.totalInGame = q.value(10).toInt();
         out.append(r);
     }
     return out;

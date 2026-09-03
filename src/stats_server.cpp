@@ -260,6 +260,26 @@ QByteArray StatsServer::BuildBoardScoreJson(const QString& comId, uint32_t board
     return toJson(root);
 }
 
+constexpr int PointsBronze = 15;
+constexpr int PointsSilver = 30;
+constexpr int PointsGold = 90;
+constexpr int PointsPlatinum = 180;
+
+int TrophyPoints(int bronze, int silver, int gold, int platinum) {
+    return bronze * PointsBronze + silver * PointsSilver + gold * PointsGold +
+           platinum * PointsPlatinum;
+}
+
+// Grade counts as a JSON object, used for both a player and a whole trophy set.
+QJsonObject GradesJson(int bronze, int silver, int gold, int platinum) {
+    QJsonObject g;
+    g.insert("bronze", bronze);
+    g.insert("silver", silver);
+    g.insert("gold", gold);
+    g.insert("platinum", platinum);
+    return g;
+}
+
 QByteArray StatsServer::BuildTrophyStatsJson(const QString& comId) const {
     QJsonObject root;
     Database db(QString{});
@@ -294,13 +314,15 @@ QByteArray StatsServer::BuildTrophyStatsJson(const QString& comId) const {
         unlocks += e.earners;
     }
 
-    // Top holders. Capped, because this is a public page and not a user dump.
+    const auto shape = db.GetTrophySetShape(comId);
     QJsonArray top;
     for (const auto& tp : db.ListTopTrophyPlayers(comId, 25)) {
         QJsonObject o;
         o.insert("npid", tp.npid);
         o.insert("trophies", tp.trophies);
         o.insert("lastEarnedAt", static_cast<qint64>(tp.lastEarnedAt));
+        o.insert("completion",
+                 shape.total > 0 ? std::round(tp.trophies * 10000.0 / shape.total) / 100.0 : -1.0);
         top.append(o);
     }
 
@@ -316,6 +338,9 @@ QByteArray StatsServer::BuildTrophyStatsJson(const QString& comId) const {
     root.insert("name", titleName);
     root.insert("players", players);
     root.insert("distinctTrophies", trophies.size());
+    root.insert("setTotal", shape.total);
+    root.insert("setGrades", GradesJson(shape.bronze, shape.silver, shape.gold, shape.platinum));
+    root.insert("setPoints", TrophyPoints(shape.bronze, shape.silver, shape.gold, shape.platinum));
     root.insert("unlocks", unlocks);
     root.insert("trophies", trophies);
     root.insert("hasTrophyNames", !meta.isEmpty());
@@ -374,6 +399,7 @@ QByteArray StatsServer::BuildTrophyPlayerJson(const QString& npid) const {
 
     QJsonArray games;
     int total = 0;
+    int bronze = 0, silver = 0, gold = 0, platinum = 0, unknown = 0, completed = 0;
     for (const auto& g : db.ListPlayerTrophySummary(*userId)) {
         QJsonObject o;
         o.insert("commid", g.comId);
@@ -381,12 +407,31 @@ QByteArray StatsServer::BuildTrophyPlayerJson(const QString& npid) const {
         o.insert("trophies", g.trophies);
         o.insert("firstEarnedAt", static_cast<qint64>(g.firstEarnedAt));
         o.insert("lastEarnedAt", static_cast<qint64>(g.lastEarnedAt));
+        o.insert("grades", GradesJson(g.bronze, g.silver, g.gold, g.platinum));
+        o.insert("unknownGrade", g.unknownGrade);
+        o.insert("points", TrophyPoints(g.bronze, g.silver, g.gold, g.platinum));
+        o.insert("setTotal", g.totalInGame);
+        o.insert("completion", g.totalInGame > 0
+                                   ? std::round(g.trophies * 10000.0 / g.totalInGame) / 100.0
+                                   : -1.0);
         games.append(o);
+
         total += g.trophies;
+        bronze += g.bronze;
+        silver += g.silver;
+        gold += g.gold;
+        platinum += g.platinum;
+        unknown += g.unknownGrade;
+        if (g.totalInGame > 0 && g.trophies >= g.totalInGame)
+            ++completed;
     }
 
     root.insert("npid", db.GetUsername(*userId).value_or(npid));
     root.insert("total", total);
+    root.insert("grades", GradesJson(bronze, silver, gold, platinum));
+    root.insert("unknownGrade", unknown);
+    root.insert("points", TrophyPoints(bronze, silver, gold, platinum));
+    root.insert("gamesCompleted", completed);
     root.insert("games", games);
     return toJson(root);
 }
