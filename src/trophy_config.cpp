@@ -55,6 +55,36 @@ TrophyConfig ParseTrophyConfig(const QByteArray& xml, const QString& language) {
             cfg.titleName = r.readElementText().trimmed().left(MaxNameLength);
             continue;
         }
+        if (name == QLatin1String("group")) {
+            // <group id="000"><name>Base Game</name><detail>…</detail></group>
+            bool gidOk = false;
+            const int gid = r.attributes().value(QLatin1String("id")).toInt(&gidOk);
+            if (!gidOk || gid < 0) {
+                continue;
+            }
+            Database::TrophyGroupRow group;
+            group.groupId = gid;
+            while (!r.atEnd() && !r.hasError()) {
+                const auto token = r.readNext();
+                if (token == QXmlStreamReader::EndElement && r.name() == QLatin1String("group")) {
+                    break;
+                }
+                if (token != QXmlStreamReader::StartElement) {
+                    continue;
+                }
+                if (r.name() == QLatin1String("name")) {
+                    group.name = r.readElementText().trimmed().left(MaxNameLength);
+                } else if (r.name() == QLatin1String("detail")) {
+                    group.detail = r.readElementText().trimmed().left(MaxDetailLength);
+                }
+            }
+            // A group with no name would render as an empty heading, which is
+            // worse than folding those trophies into the default section.
+            if (!group.name.isEmpty()) {
+                cfg.groups.append(group);
+            }
+            continue;
+        }
         if (name != QLatin1String("trophy")) {
             continue;
         }

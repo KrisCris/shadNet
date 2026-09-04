@@ -329,7 +329,17 @@ public:
         QString language; // which TROP_xx.XML it came from; empty for the master
     };
 
-    bool ImportTrophyMeta(const QString& comId, const QList<TrophyMetaRow>& rows);
+    // A trophy group: the base game, or a DLC pack. Trophies carry a groupId
+    // that points here, so DLC can be shown as its own section.
+    struct TrophyGroupRow {
+        int32_t groupId = 0;
+        QString name;
+        QString detail;
+    };
+    QList<TrophyGroupRow> ListTrophyGroups(const QString& comId);
+
+    bool ImportTrophyMeta(const QString& comId, const QList<TrophyMetaRow>& rows,
+                          const QList<TrophyGroupRow>& groups = {});
     QList<TrophyMetaRow> ListTrophyMeta(const QString& comId);
     int CountTrophyMeta(const QString& comId);
     bool DeleteTrophyMeta(const QString& comId);

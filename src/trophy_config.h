@@ -12,6 +12,9 @@ struct TrophyConfig {
     QString titleName;
     QString language;
     QList<Database::TrophyMetaRow> trophies;
+    // Trophy groups: the base game, plus a group per DLC pack. Empty for a title
+    // that declares none, which is normal for a game with no add-ons.
+    QList<Database::TrophyGroupRow> groups;
 
     // Empty when parsing succeeded.
     QString error;

@@ -270,6 +270,18 @@ int TrophyPoints(int bronze, int silver, int gold, int platinum) {
            platinum * PointsPlatinum;
 }
 
+constexpr int MinPlayersForRarity = 20;
+
+QString RarityBand(double percent) {
+    if (percent >= 50.0)
+        return QStringLiteral("common");
+    if (percent >= 15.0)
+        return QStringLiteral("uncommon");
+    if (percent > 5.0)
+        return QStringLiteral("rare");
+    return QStringLiteral("veryrare");
+}
+
 // Grade counts as a JSON object, used for both a player and a whole trophy set.
 QJsonObject GradesJson(int bronze, int silver, int gold, int platinum) {
     QJsonObject g;
@@ -306,15 +318,20 @@ QByteArray StatsServer::BuildTrophyStatsJson(const QString& comId) const {
             o.insert("detail", it->detail);
             o.insert("grade", it->grade);
             o.insert("hidden", it->hidden);
+            o.insert("groupId", it->groupId);
         }
         o.insert("earners", e.earners);
-        o.insert("earnedPercent",
-                 players > 0 ? std::round(e.earners * 10000.0 / players) / 100.0 : 0.0);
+        const double share = players > 0 ? std::round(e.earners * 10000.0 / players) / 100.0 : 0.0;
+        o.insert("earnedPercent", share);
+        if (players >= MinPlayersForRarity) {
+            o.insert("rarity", RarityBand(share));
+        }
         trophies.append(o);
         unlocks += e.earners;
     }
 
     const auto shape = db.GetTrophySetShape(comId);
+
     QJsonArray top;
     for (const auto& tp : db.ListTopTrophyPlayers(comId, 25)) {
         QJsonObject o;
@@ -342,7 +359,19 @@ QByteArray StatsServer::BuildTrophyStatsJson(const QString& comId) const {
     root.insert("setGrades", GradesJson(shape.bronze, shape.silver, shape.gold, shape.platinum));
     root.insert("setPoints", TrophyPoints(shape.bronze, shape.silver, shape.gold, shape.platinum));
     root.insert("unlocks", unlocks);
+    // Groups let DLC be shown separately instead of mixed into the base list.
+    QJsonArray groups;
+    for (const auto& g : db.ListTrophyGroups(comId)) {
+        QJsonObject o;
+        o.insert("groupId", g.groupId);
+        o.insert("name", g.name);
+        o.insert("detail", g.detail);
+        groups.append(o);
+    }
+
     root.insert("trophies", trophies);
+    root.insert("groups", groups);
+    root.insert("rarityAvailable", players >= MinPlayersForRarity);
     root.insert("hasTrophyNames", !meta.isEmpty());
     root.insert("topPlayers", top);
     return toJson(root);

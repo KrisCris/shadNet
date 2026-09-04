@@ -1163,6 +1163,7 @@ void AdminApiServer::RegisterRoutes() {
             if (!bodyOpt)
                 return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
                                  parseError);
+
             QString name = bodyOpt->value(QStringLiteral("name")).toString().simplified();
             name.removeIf([](QChar c) { return c.category() == QChar::Other_Control; });
             name = name.left(128);
@@ -1302,7 +1303,7 @@ void AdminApiServer::RegisterRoutes() {
                     QStringLiteral("This file is for %1, not %2.").arg(cfg.comId, comId));
             }
 
-            if (!m_db->ImportTrophyMeta(comId, cfg.trophies)) {
+            if (!m_db->ImportTrophyMeta(comId, cfg.trophies, cfg.groups)) {
                 qCritical() << "AdminApi: trophy config import failed for" << comId << ":"
                             << m_db->lastError();
                 return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
@@ -1325,6 +1326,7 @@ void AdminApiServer::RegisterRoutes() {
             out.insert(QStringLiteral("imported"), true);
             out.insert(QStringLiteral("comId"), comId);
             out.insert(QStringLiteral("trophies"), cfg.trophies.size());
+            out.insert(QStringLiteral("groups"), cfg.groups.size());
             out.insert(QStringLiteral("titleName"), cfg.titleName);
             out.insert(QStringLiteral("titleNameApplied"), titleNamed);
             return JsonOk(out);

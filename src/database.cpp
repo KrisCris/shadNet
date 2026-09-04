@@ -310,6 +310,22 @@ bool Database::Migrate() {
         Exec(ins6);
     }
 
+    // Migration 7: trophy group names, so DLC packs can be shown as their own
+    // sections rather than mixed into the base game's list. Comes from the same
+    // TROP.XML as the trophy names.
+    if (!HasMigration(7)) {
+        Exec("CREATE TABLE IF NOT EXISTS trophy_group("
+             "  communication_id TEXT    NOT NULL,"
+             "  group_id         INTEGER NOT NULL,"
+             "  name             TEXT    NOT NULL,"
+             "  detail           TEXT,"
+             "  PRIMARY KEY(communication_id, group_id))");
+
+        QSqlQuery ins7(m_db);
+        ins7.prepare("INSERT OR IGNORE INTO migration VALUES(7,'trophy groups')");
+        Exec(ins7);
+    }
+
     qInfo() << "Database migrations complete";
 
     RunMaintenance();
@@ -1464,7 +1480,8 @@ Database::TrophyTotals Database::GetTrophyTotals() {
     return t;
 }
 
-bool Database::ImportTrophyMeta(const QString& comId, const QList<TrophyMetaRow>& rows) {
+bool Database::ImportTrophyMeta(const QString& comId, const QList<TrophyMetaRow>& rows,
+                                const QList<TrophyGroupRow>& groups) {
     if (comId.isEmpty())
         return false;
 
@@ -1481,6 +1498,33 @@ bool Database::ImportTrophyMeta(const QString& comId, const QList<TrophyMetaRow>
     if (!Exec(del)) {
         m_db.rollback();
         return false;
+    }
+
+    QSqlQuery delGroups(m_db);
+    delGroups.prepare("DELETE FROM trophy_group WHERE communication_id=?");
+    delGroups.addBindValue(comId);
+    if (!Exec(delGroups)) {
+        m_db.rollback();
+        return false;
+    }
+
+    QSqlQuery g(m_db);
+    if (!g.prepare("INSERT INTO trophy_group(communication_id, group_id, name, detail) "
+                   "VALUES(?,?,?,?)")) {
+        m_lastError = g.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    for (const TrophyGroupRow& r : groups) {
+        g.bindValue(0, comId);
+        g.bindValue(1, r.groupId);
+        g.bindValue(2, r.name);
+        g.bindValue(3, r.detail);
+        if (!Exec(g)) {
+            qCritical() << "ImportTrophyMeta: group insert failed:" << m_lastError;
+            m_db.rollback();
+            return false;
+        }
     }
 
     QSqlQuery q(m_db);
@@ -1517,6 +1561,24 @@ bool Database::ImportTrophyMeta(const QString& comId, const QList<TrophyMetaRow>
     }
     qInfo() << "ImportTrophyMeta:" << rows.size() << "trophies for" << comId;
     return true;
+}
+
+QList<Database::TrophyGroupRow> Database::ListTrophyGroups(const QString& comId) {
+    QList<TrophyGroupRow> out;
+    QSqlQuery q(m_db);
+    q.prepare("SELECT group_id, name, COALESCE(detail,'') FROM trophy_group "
+              "WHERE communication_id=? ORDER BY group_id ASC");
+    q.addBindValue(comId);
+    if (!Exec(q))
+        return out;
+    while (q.next()) {
+        TrophyGroupRow r;
+        r.groupId = q.value(0).toInt();
+        r.name = q.value(1).toString();
+        r.detail = q.value(2).toString();
+        out.append(r);
+    }
+    return out;
 }
 
 QList<Database::TrophyMetaRow> Database::ListTrophyMeta(const QString& comId) {
