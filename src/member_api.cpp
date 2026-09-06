@@ -62,8 +62,6 @@ std::optional<QJsonObject> ParseJsonBody(const QHttpServerRequest& req, QString&
     return doc.object();
 }
 
-// Compares in constant time, so the key cannot be recovered a byte at a time by
-// measuring how long a rejection takes.
 bool SecretsEqual(const QByteArray& a, const QByteArray& b) {
     if (a.size() != b.size())
         return false;
@@ -73,7 +71,6 @@ bool SecretsEqual(const QByteArray& a, const QByteArray& b) {
     return diff == 0;
 }
 
-// Reads the bearer token from the Authorization header.
 QString BearerToken(const QHttpServerRequest& req) {
     const QByteArray rawAuth = req.value("Authorization");
     if (rawAuth.isEmpty())
@@ -348,7 +345,6 @@ void MemberApiServer::RegisterRoutes() {
                                  QStringLiteral("Choose a password of at least %1 characters.")
                                      .arg(MinPasswordLength));
             }
-
             if (!m_config->IsRegistrationAllowed(key)) {
                 RegisterFailure(peer);
                 return JsonError(QHttpServerResponse::StatusCode::Forbidden, ERR_FORBIDDEN,
@@ -357,7 +353,6 @@ void MemberApiServer::RegisterRoutes() {
                                      : QStringLiteral("This server is not accepting new "
                                                       "accounts."));
             }
-
             const QString defaultAvatar =
                 QStringLiteral("https://shadps4.net/shadnet/avatars/default_01.png");
             const auto err = m_db->CreateAccount(npid, password, defaultAvatar, email);
@@ -484,9 +479,10 @@ void MemberApiServer::RegisterRoutes() {
                       body.insert(QStringLiteral("creation"), static_cast<qint64>(row->creation));
                       body.insert(QStringLiteral("lastLogin"), static_cast<qint64>(row->lastLogin));
                       body.insert(QStringLiteral("clientVersion"), row->clientVersion);
-                      // Deliberately not included: ban reason, admin flag, other accounts.
-                      // This endpoint answers "who am I", not "what does the server think
-                      // of me".
+                      body.insert(QStringLiteral("clientVersionAt"),
+                                  static_cast<qint64>(row->clientVersionAt));
+                      body.insert(QStringLiteral("avatarUrl"),
+                                  m_db->GetAvatarUrl(session->userId).value_or(QString()));
                       return JsonOk(body);
                   });
 
@@ -625,7 +621,6 @@ void MemberApiServer::RegisterRoutes() {
                                  QStringLiteral("Choose a password of at least %1 characters.")
                                      .arg(MinPasswordLength));
             }
-
             if (!m_db->CheckUser(session->npid, current, QString(), false)) {
                 RegisterFailure(PeerOf(req));
                 return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
@@ -637,7 +632,6 @@ void MemberApiServer::RegisterRoutes() {
                 return JsonError(QHttpServerResponse::StatusCode::InternalServerError, ERR_INTERNAL,
                                  QStringLiteral("The password could not be changed."));
             }
-
             RevokeSessionsFor(session->userId);
 
             qInfo().nospace().noquote()
