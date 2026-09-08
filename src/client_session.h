@@ -35,6 +35,7 @@ struct SharedState {
         QString npid;
         std::function<void(QByteArray)> send;
         std::function<void(uint64_t)> resetMatchingRoomState;
+        uint32_t matchingContextId = 0;
         // Force-closes this session's socket.
         std::function<void()> disconnect;
         // Online friends for this session
@@ -295,9 +296,10 @@ private:
                          const QList<QPair<QString, QString>>& extdData = {});
 
     // Matching helpers (cmd_matching.cpp)
-    void SendMatchingNotification(NotificationType type, const QByteArray& payload,
+    using MatchingNotificationBuilder = std::function<QByteArray(uint32_t)>;
+    void SendMatchingNotification(const MatchingNotificationBuilder& buildPacket,
                                   const QString& targetNpid);
-    void NotifyRoomMembers(NotificationType type, const QByteArray& payload,
+    void NotifyRoomMembers(const MatchingNotificationBuilder& buildPacket,
                            const QString& matchingKey, uint64_t roomId,
                            const QString& excludeNpid = {});
     void SendRoomMemberEvent(uint64_t roomId, uint32_t event, uint32_t cause,
