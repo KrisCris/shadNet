@@ -235,15 +235,29 @@ std::optional<MemberApiServer::MemberSession> MemberApiServer::Authenticate(
     if (token.isEmpty())
         return std::nullopt;
 
-    QWriteLocker lk(&m_sessionsLock);
-    auto it = m_sessions.find(token);
-    if (it == m_sessions.end())
-        return std::nullopt;
-    if (it->expires <= QDateTime::currentDateTimeUtc()) {
-        m_sessions.erase(it);
+    MemberSession session;
+    {
+        QWriteLocker lk(&m_sessionsLock);
+        auto it = m_sessions.find(token);
+        if (it == m_sessions.end())
+            return std::nullopt;
+        if (it->expires <= QDateTime::currentDateTimeUtc()) {
+            m_sessions.erase(it);
+            return std::nullopt;
+        }
+        session = *it;
+    }
+
+    // A token outlives the account it was issued for unless we look: banning
+    // someone kicks them out of the game, but their web session would keep
+    // working until it expired. One indexed lookup per authenticated request
+    // is cheaper than a bearer token that stays valid for a banned account.
+    const auto row = m_db->GetUserRow(session.userId);
+    if (!row || row->banned) {
+        RevokeSessionsFor(session.userId);
         return std::nullopt;
     }
-    return *it;
+    return session;
 }
 
 // Throttling
