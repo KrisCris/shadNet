@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "member_api.h"
 
+#include "api_peer.h"
+
 #include <cmath>
 
 #include <QByteArray>
@@ -82,8 +84,9 @@ QString BearerToken(const QHttpServerRequest& req) {
     return authStr.mid(prefix.size()).trimmed();
 }
 
-QString PeerOf(const QHttpServerRequest& req) {
-    return req.remoteAddress().toString();
+QString PeerOf(const QHttpServerRequest& req, const ConfigManager* config) {
+    return ShadNet::ResolvePeer(
+        req, config ? config->GetApiTrustedProxies() : QStringList());
 }
 
 bool ValidNpid(const QString& npid) {
@@ -123,7 +126,7 @@ bool MemberApiServer::CheckApiKey(const QHttpServerRequest& req) const {
 
 QHttpServerResponse MemberApiServer::ApiKeyError(const QHttpServerRequest& req) const {
     const bool absent = req.value("X-Member-Api-Key").isEmpty();
-    qWarning().nospace().noquote() << "MemberApi: rejected request from " << PeerOf(req)
+    qWarning().nospace().noquote() << "MemberApi: rejected request from " << PeerOf(req, m_config)
                                    << " — key " << (absent ? "not supplied" : "did not match");
     return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_BAD_API_KEY,
                      QStringLiteral("This server does not accept requests from this client."));
@@ -305,7 +308,7 @@ void MemberApiServer::RegisterRoutes() {
             if (!CheckApiKey(req))
                 return ApiKeyError(req);
 
-            const QString peer = PeerOf(req);
+            const QString peer = PeerOf(req, m_config);
             int retryAfter = 0;
             if (IsThrottled(peer, retryAfter)) {
                 return JsonError(
@@ -397,7 +400,7 @@ void MemberApiServer::RegisterRoutes() {
             if (!CheckApiKey(req))
                 return ApiKeyError(req);
 
-            const QString peer = PeerOf(req);
+            const QString peer = PeerOf(req, m_config);
             int retryAfter = 0;
             if (IsThrottled(peer, retryAfter)) {
                 return JsonError(
@@ -631,7 +634,7 @@ void MemberApiServer::RegisterRoutes() {
                                      .arg(MinPasswordLength));
             }
             if (!m_db->CheckUser(session->npid, current, QString(), false)) {
-                RegisterFailure(PeerOf(req));
+                RegisterFailure(PeerOf(req, m_config));
                 return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_UNAUTHORIZED,
                                  QStringLiteral("That is not your current password."));
             }

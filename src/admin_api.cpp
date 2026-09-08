@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "admin_api.h"
 
+#include "api_peer.h"
+
 #include <cmath>
 
 #include <QByteArray>
@@ -116,9 +118,9 @@ bool SecretsEqual(const QByteArray& a, const QByteArray& b) {
     return diff == 0;
 }
 
-QString PeerKey(const QHttpServerRequest& req) {
-    const QHostAddress addr = req.remoteAddress();
-    return addr.isNull() ? QStringLiteral("unknown") : addr.toString();
+QString PeerKey(const QHttpServerRequest& req, const ConfigManager* config) {
+    return ShadNet::ResolvePeer(
+        req, config ? config->GetApiTrustedProxies() : QStringList());
 }
 
 } // namespace
@@ -299,7 +301,7 @@ bool AdminApiServer::CheckApiKey(const QHttpServerRequest& req) const {
 
 QHttpServerResponse AdminApiServer::ApiKeyError(const QHttpServerRequest& req) const {
     const bool absent = req.value("X-Admin-Api-Key").isEmpty();
-    qWarning().nospace().noquote() << "AdminApi: rejected request from " << PeerKey(req)
+    qWarning().nospace().noquote() << "AdminApi: rejected request from " << PeerKey(req, m_config)
                                    << " — API key " << (absent ? "not supplied" : "did not match");
     return JsonError(QHttpServerResponse::StatusCode::Unauthorized, ERR_BAD_API_KEY,
                      QStringLiteral("This server requires an admin API key. Set it in the "
@@ -452,7 +454,7 @@ void AdminApiServer::RegisterRoutes() {
     m_http->route(
         "/admin/v1/login", QHttpServerRequest::Method::Post,
         [this](const QHttpServerRequest& req) -> QHttpServerResponse {
-            const QString peer = PeerKey(req);
+            const QString peer = PeerKey(req, m_config);
             int retryAfter = 0;
             if (IsThrottled(peer, retryAfter)) {
                 return JsonError(

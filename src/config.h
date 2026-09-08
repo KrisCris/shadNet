@@ -130,6 +130,15 @@ public:
 
     QString EnsureMemberApiKey();
 
+    // Hops permitted to identify the real client via X-Forwarded-For, so the
+    // REST APIs' per-peer login throttles count the member rather than the web
+    // frontend they all arrive through. See api_peer.h. Empty means trust
+    // nobody, which is the safe default for a directly reachable API.
+    QStringList GetApiTrustedProxies() const {
+        QReadLocker lk(&m_lock);
+        return m_apiTrustedProxies;
+    }
+
     bool IsRegistrationAllowed(const QString& key) const {
         QReadLocker lk(&m_lock);
         return m_registrationSecretKey.isEmpty() ||
@@ -179,6 +188,7 @@ private:
     int m_adminSessionMinutes = 480;
     QString m_adminApiKey;
     QStringList m_adminsList;
+    QStringList m_apiTrustedProxies;
     QSet<QString> m_bannedDomains;
     QString m_registrationSecretKey;
     bool m_memberApiEnabled = true;

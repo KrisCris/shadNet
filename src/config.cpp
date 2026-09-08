@@ -122,6 +122,7 @@ void ConfigManager::Parse(const QString& path) {
     // Accounts named here are granted admin in the database at startup. This is the
     // only way to create the first admin on a fresh install.
     m_adminsList = strList("AdminsList");
+    m_apiTrustedProxies = strList("ApiTrustedProxies");
     m_registrationSecretKey = str("RegistrationSecretKey", "");
 
     s.sync();
