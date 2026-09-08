@@ -476,6 +476,15 @@ void MemberApiServer::RegisterRoutes() {
                       QJsonObject body;
                       body.insert(QStringLiteral("npid"), row->username);
                       body.insert(QStringLiteral("email"), row->email);
+                      // Whether this account holds admin rights, so a client can
+                      // decide whether to offer an admin sign-in. Without it the
+                      // only way to find out is to try /admin/v1/login, and a
+                      // non-admin attempt counts towards that endpoint's per-peer
+                      // lockout: five block admin sign-in from that address for
+                      // five minutes. For a shared web frontend, where every
+                      // member signs in from the same address, that would lock the
+                      // operators out as a matter of routine.
+                      body.insert(QStringLiteral("admin"), row->admin);
                       body.insert(QStringLiteral("creation"), static_cast<qint64>(row->creation));
                       body.insert(QStringLiteral("lastLogin"), static_cast<qint64>(row->lastLogin));
                       body.insert(QStringLiteral("clientVersion"), row->clientVersion);
