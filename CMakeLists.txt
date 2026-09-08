@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(shadnet VERSION 1.0.0 LANGUAGES CXX)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -81,6 +83,10 @@ set(SOURCES
     src/webapi_routes_session.cpp
     src/webapi_routes_identity.h
     src/webapi_routes_identity.cpp
+    src/bloodborne_summon_broker.h
+    src/bloodborne_summon_broker.cpp
+    src/webapi_routes_bloodborne.h
+    src/webapi_routes_bloodborne.cpp
     src/webapi_routes_common.h
     # Read-only stats HTTP/JSON listener
     src/stats_server.h
@@ -122,4 +128,38 @@ target_link_libraries(shadnet PRIVATE
 
 
 
+if(BUILD_TESTING)
+    add_executable(test_bloodborne_summon_broker EXCLUDE_FROM_ALL
+        tests/test_bloodborne_summon_broker.cpp
+        src/bloodborne_summon_broker.cpp
+    )
+    target_include_directories(test_bloodborne_summon_broker PRIVATE src)
+    target_link_libraries(test_bloodborne_summon_broker PRIVATE Qt6::Core)
+    add_test(NAME bloodborne_summon_broker COMMAND test_bloodborne_summon_broker)
+
+    add_executable(bloodborne_matching_guest_probe EXCLUDE_FROM_ALL
+        tests/bloodborne_matching_guest_probe.cpp
+        "${PROTO_OUT}/shadnet.pb.cc"
+    )
+    target_include_directories(bloodborne_matching_guest_probe PRIVATE
+        src
+        "${PROTO_OUT}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/externals/protobuf/src"
+    )
+    target_link_libraries(bloodborne_matching_guest_probe PRIVATE libprotobuf)
+endif()
+
+# shadNet resolves relative paths against the binary's directory
+# (QDir::setCurrent(applicationDirPath()) in main.cpp), so these must sit
+# next to the executable or matchmaking has no world groupings.
+add_custom_command(TARGET shadnet POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/worlds.cfg"
+        "$<TARGET_FILE_DIR:shadnet>/worlds.cfg"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/scoreboards.cfg"
+        "$<TARGET_FILE_DIR:shadnet>/scoreboards.cfg"
+)
+
 install(TARGETS shadnet RUNTIME DESTINATION bin)
+install(FILES worlds.cfg scoreboards.cfg DESTINATION bin)

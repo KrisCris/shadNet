@@ -104,6 +104,7 @@ void ConfigManager::Parse(const QString& path) {
     m_webapiPort = str("WebApiPort", "31315");
     m_statsEnabled = boolean("StatsEnabled", true);
     m_matching2Enabled = boolean("Matching2Enabled", false);
+    m_bloodborneSeamlessCoop = boolean("BloodborneSeamlessCoop", false);
     m_trophiesEnabled = boolean("TrophiesEnabled", true);
     m_memberApiEnabled = boolean("MemberApiEnabled", false);
     m_memberApiHost = str("MemberApiHost", "127.0.0.1");

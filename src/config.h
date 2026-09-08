@@ -84,6 +84,11 @@ public:
         return m_adminsList;
     }
 
+    bool IsBloodborneSeamlessCoopEnabled() const {
+        QReadLocker lk(&m_lock);
+        return m_bloodborneSeamlessCoop;
+    }
+
     bool IsEmailValidated() const {
         QReadLocker lk(&m_lock);
         return m_emailValidated;
@@ -162,6 +167,7 @@ private:
     QString m_webapiPort = "31315";
     bool m_statsEnabled = true;
     bool m_matching2Enabled = false;
+    bool m_bloodborneSeamlessCoop = false;
     bool m_trophiesEnabled = true;
     QString m_statsPort = "31320";
     QString m_statsPath = "stats";
