@@ -285,6 +285,84 @@ int main() {
       "\"HostData\":\"remote-host-owned-data\""));
   CHECK(!remoteDeliveryResponse.contains("\"SeamlessWarp\""));
 
+  // ---------------------------------------------------------------- level range
+  //
+  // Co-op is symmetric +/- (20% + 20); an invader may be the same distance
+  // below the host but only (10% + 10) above. Each bound is checked at the
+  // exact boundary and one level outside it.
+  {
+    auto sign = [](int level, int summonType) {
+      return QByteArray(
+                 R"({"MessageId":"SummonDataCreateRequest","SessionId":"guest-)")
+          .append(QByteArray::number(level * 10 + summonType))
+          .append(R"(","UserId":)")
+          .append(QByteArray::number(9000 + level * 4 + summonType))
+          .append(R"(,"AreaId":1,"AreaRegionId":2,"ChannelId":0,"MatchingLevel":)")
+          .append(QByteArray::number(level))
+          .append(R"(,"SummonDataVersion":3,"SummonMethod":0,"SummonType":)")
+          .append(QByteArray::number(summonType))
+          .append(R"(,"SummonWord":null})");
+    };
+    auto hostSearch = [](int level, int summonType, const char *word) {
+      QByteArray wordField =
+          word ? QByteArray(R"(")").append(word).append(R"(")") : QByteArray("null");
+      return QByteArray(
+                 R"({"MessageId":"SummonDataGetListRequest","SessionId":"host","UserId":1,)"
+                 R"("AreaId":1,"AreaRegionId":2,"ChannelId":0,"MatchingLevel":)")
+          .append(QByteArray::number(level))
+          .append(R"(,"SummonDataVersion":3,"SummonMethod":0,"SummonTypeList":[{"SummonType":)")
+          .append(QByteArray::number(summonType))
+          .append(R"(}],"SummonWord":)")
+          .append(wordField)
+          .append(R"(,"GetMaxCount":20})");
+    };
+    auto visible = [&](int hostLevel, int guestLevel, int summonType,
+                       const char *signWord, const char *searchWord) {
+      Bloodborne::SummonBroker b(60'000);
+      QByteArray raw = sign(guestLevel, summonType);
+      if (signWord) {
+        raw.replace(R"("SummonWord":null)",
+                    QByteArray(R"("SummonWord":")").append(signWord).append(R"(")"));
+      }
+      b.Advertise(Parse(raw), raw, 100);
+      return !b.Search(Parse(hostSearch(hostLevel, summonType, searchWord)), 100)
+                  .isEmpty();
+    };
+
+    // Co-op, host level 30: +/- (6 + 20) = 26, so 4..56 inclusive.
+    CHECK(visible(30, 56, 0, nullptr, nullptr));
+    CHECK(!visible(30, 57, 0, nullptr, nullptr));
+    CHECK(visible(30, 4, 0, nullptr, nullptr));
+    CHECK(!visible(30, 3, 0, nullptr, nullptr));
+
+    // Co-op, host level 100: +/- (20 + 20) = 40, so 60..140 inclusive.
+    CHECK(visible(100, 140, 0, nullptr, nullptr));
+    CHECK(!visible(100, 141, 0, nullptr, nullptr));
+    CHECK(visible(100, 60, 0, nullptr, nullptr));
+    CHECK(!visible(100, 59, 0, nullptr, nullptr));
+
+    // The previous 20% + 10 rule rejected these; vanilla allows them.
+    CHECK(visible(100, 135, 0, nullptr, nullptr));
+    CHECK(visible(100, 65, 0, nullptr, nullptr));
+
+    // Invaders, host level 30: 4..43 (down 26, up 3 + 10 = 13).
+    CHECK(visible(30, 43, 2, nullptr, nullptr));
+    CHECK(!visible(30, 44, 2, nullptr, nullptr));
+    CHECK(visible(30, 4, 2, nullptr, nullptr));
+    CHECK(!visible(30, 3, 2, nullptr, nullptr));
+
+    // Invaders, host level 100: 60..120.
+    CHECK(visible(100, 120, 2, nullptr, nullptr));
+    CHECK(!visible(100, 121, 2, nullptr, nullptr));
+
+    // A matching password lifts the level rule for co-op...
+    CHECK(visible(100, 400, 0, "hunt", "hunt"));
+    // ...but never for an invader.
+    CHECK(!visible(100, 400, 2, "hunt", "hunt"));
+    // A password still has to match.
+    CHECK(!visible(100, 100, 0, "hunt", "wrong"));
+  }
+
   std::cout << "Bloodborne summon broker state test passed\n";
   return 0;
 }

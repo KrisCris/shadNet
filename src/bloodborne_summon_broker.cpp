@@ -55,6 +55,12 @@ bool ForceConsumeRequested(const QJsonObject& request) {
            request.value(QStringLiteral("SeamlessLeave")).toBool(false);
 }
 
+// Observed on the wire: the Small Resonant Bell publishes SummonType 0, the
+// Sinister Resonant Bell publishes SummonType 2. Type 1 has not been seen; it
+// falls through to the co-op rule rather than being rejected.
+constexpr int SummonTypeCoopGuest = 0;
+constexpr int SummonTypeInvader = 2;
+
 std::optional<qint64> HostPlacementMap(const QByteArray& placement) {
     constexpr qsizetype MapBegin = 2;
     if (!placement.startsWith("1,")) {
@@ -108,11 +114,35 @@ bool MatchesSearch(const QJsonObject& request, const QJsonObject& sign, bool any
         return false;
     }
 
+    // Level range. The searcher is always the host, the sign is always the guest
+    // or the invader, so both bounds are computed from the host's level.
+    //
+    // Co-op is symmetric: +/- (20% of level + 20). Those four numbers are the
+    // game's own -- CoopMatchingLevelUpper/LowerRel and .../Abs, recovered from
+    // the retail 01.09 executable at config offsets 0x8e0..0x8ec as
+    // +20/+20/-20/-20.
+    //
+    // Invasions are asymmetric: an invader may be far below the host but only
+    // just above. The executable carries no invasion level parameter -- the
+    // upper bound below comes from the community range tables, which it
+    // reproduces exactly at levels 30 and 100.
+    //
+    // Nothing downstream re-checks this. Bloodborne's candidate filter
+    // (0x14b6f09..0x14b750b) rejects on identity, session, area group,
+    // duplicates and freshness, and never on level, so whatever passes here is
+    // what the player can summon.
     const qint64 requestLevel = Integer(request, QStringLiteral("MatchingLevel"), -1);
     const qint64 signLevel = Integer(sign, QStringLiteral("MatchingLevel"), -1);
-    if (!anywhereSummons && requestWord.isEmpty() && requestLevel >= 0 && signLevel >= 0) {
-        const qint64 levelRange = 10 + requestLevel / 5;
-        if (std::abs(requestLevel - signLevel) > levelRange) {
+    const bool isInvasion =
+        static_cast<int>(Integer(sign, QStringLiteral("SummonType"), SummonTypeCoopGuest)) ==
+        SummonTypeInvader;
+    // A matching password lifts the level restriction for co-op only; in vanilla
+    // it does not affect invasions.
+    const bool passwordBypass = !requestWord.isEmpty() && !isInvasion;
+    if (!anywhereSummons && !passwordBypass && requestLevel >= 0 && signLevel >= 0) {
+        const qint64 below = requestLevel / 5 + 20;                       // 20% + 20
+        const qint64 above = isInvasion ? requestLevel / 10 + 10 : below; // 10% + 10
+        if (signLevel < requestLevel - below || signLevel > requestLevel + above) {
             return false;
         }
     }
