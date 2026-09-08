@@ -129,7 +129,10 @@ target_link_libraries(shadnet PRIVATE
 
 
 if(BUILD_TESTING)
-    add_executable(test_bloodborne_summon_broker EXCLUDE_FROM_ALL
+    # Deliberately not EXCLUDE_FROM_ALL: a test ctest knows about but `all`
+    # never builds reports "Not Run" rather than failing, which reads like a
+    # pass in CI output. If BUILD_TESTING is on, build the test.
+    add_executable(test_bloodborne_summon_broker
         tests/test_bloodborne_summon_broker.cpp
         src/bloodborne_summon_broker.cpp
     )
