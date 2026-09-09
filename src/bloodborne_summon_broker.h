@@ -55,6 +55,12 @@ public:
     ConsumeResult Consume(const QJsonObject& request, qint64 nowMs);
 
     std::optional<State> StateFor(const QString& sessionId, qint64 userId, qint64 nowMs);
+
+    // The key identifying one advertisement, as used internally and by
+    // StateFor(). Exposed because a create request held open for a claim has
+    // to be matched against a Claim() that arrives on a different connection,
+    // and both sides must agree on what identifies the advertisement.
+    static QString KeyFor(const QString& sessionId, qint64 userId);
     int Size(qint64 nowMs);
     bool IsSeamlessCoopEnabled() const;
     bool IsSeamlessAnywhereSummonsEnabled() const;

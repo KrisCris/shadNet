@@ -32,7 +32,7 @@ std::optional<qint64> OptionalInteger(const QJsonObject& object, const QString& 
 }
 
 QString RecordKey(const QString& sessionId, qint64 userId) {
-    return sessionId + QLatin1Char(':') + QString::number(userId);
+    return SummonBroker::KeyFor(sessionId, userId);
 }
 
 QString RecordKey(const QJsonObject& advertisement) {
@@ -390,6 +390,10 @@ SummonBroker::SummonBroker(Options options)
       m_seamlessTtlMs(std::max<qint64>(m_ttlMs, options.seamlessTtlMs)),
       m_seamlessCoop(options.seamlessCoop),
       m_seamlessAnywhereSummons(options.seamlessAnywhereSummons || options.seamlessCoop) {}
+
+QString SummonBroker::KeyFor(const QString& sessionId, qint64 userId) {
+    return sessionId + QLatin1Char(':') + QString::number(userId);
+}
 
 SummonBroker::AdvertiseResult SummonBroker::Advertise(const QJsonObject& body,
                                                       const QByteArray& rawBody, qint64 nowMs) {
