@@ -121,6 +121,16 @@ void ClientSession::ProcessPacket(uint16_t command, uint64_t packetId, const QBy
     auto cmdOpt = static_cast<CommandType>(command);
 
     ErrorType result = DispatchCommand(cmdOpt, se, reply);
+    // A failed command used to return its code to the client and vanish. That
+    // makes "the client never asked" and "we refused" look identical in the
+    // log, which is exactly the pair you need to tell apart when a summon does
+    // not complete.
+    if (result != ErrorType::NoError) {
+        qWarning().nospace() << "Command " << static_cast<uint16_t>(cmdOpt)
+                             << " from " << (m_info.npid.isEmpty() ? QStringLiteral("<unauthenticated>")
+                                                                   : m_info.npid)
+                             << " failed: " << ErrorTypeName(result);
+    }
     reply[static_cast<int>(HEADER_SIZE)] = static_cast<char>(static_cast<uint8_t>(result));
     fixPacketSize(reply);
     SendPacket(reply);

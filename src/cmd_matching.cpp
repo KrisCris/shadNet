@@ -4,6 +4,7 @@
 #include <QDateTime>
 #include <QDebug>
 #include <QHostAddress>
+#include <QStringList>
 #include <QtEndian>
 #include "client_session.h"
 #include "proto_utils.h"
@@ -668,19 +669,43 @@ ErrorType ClientSession::CmdJoinRoom(StreamExtractor& data, QByteArray& reply) {
 
     uint64_t roomId = req.room_id();
 
+    // Logged on entry, not only on success: the interesting failure is a guest
+    // that asks to join and is turned away, and every refusal below is silent
+    // to the client's user.
+    qInfo() << "JoinRoom: " << m_info.npid << "requests room" << roomId << "key="
+            << m_matching.matchingKey;
+
     uint16_t myMemberId = 0;
     uint16_t maxSlot = 0;
 
     {
         QWriteLocker lk(&m_shared->matching.roomsLock);
         auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, roomId});
-        if (roomIt == m_shared->matching.rooms.end())
+        if (roomIt == m_shared->matching.rooms.end()) {
+            // Rooms are keyed on (matching key, room id), so a guest whose
+            // ContextStart produced a different key cannot see the host's room
+            // at all -- and the refusal looks the same as a room that expired.
+            // Name what does exist so the two are distinguishable.
+            QStringList known;
+            for (auto it = m_shared->matching.rooms.constBegin();
+                 it != m_shared->matching.rooms.constEnd(); ++it) {
+                known << QStringLiteral("%1/%2").arg(it.key().first).arg(it.key().second);
+            }
+            qWarning() << "JoinRoom: no room" << roomId << "for key" << m_matching.matchingKey
+                       << "-- rooms that exist (key/id):"
+                       << (known.isEmpty() ? QStringLiteral("<none>") : known.join(", "));
             return ErrorType::RoomMissing;
+        }
         Room& room = roomIt.value();
-        if (room.isFull())
+        if (room.isFull()) {
+            qWarning() << "JoinRoom:" << m_info.npid << "refused room" << roomId << "-- full at"
+                       << room.members.size() << "of" << room.maxSlot;
             return ErrorType::RoomFull;
-        if (room.findByNpid(m_info.npid))
+        }
+        if (room.findByNpid(m_info.npid)) {
+            qWarning() << "JoinRoom:" << m_info.npid << "is already in room" << roomId;
             return ErrorType::RoomAlreadyJoined;
+        }
         const uint64_t accountId = static_cast<uint64_t>(m_info.userId);
         if ((!room.allowedUsers.isEmpty() && !room.allowedUsers.contains(m_info.npid)) ||
             (!room.allowedAccountIds.isEmpty() && !room.allowedAccountIds.contains(accountId)) ||

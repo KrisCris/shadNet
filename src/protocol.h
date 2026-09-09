@@ -141,3 +141,82 @@ enum class ErrorType : uint8_t {
     Unsupported = 33,
     TooLarge = 34, // TSS file on the server exceeds the slot's documented maximum
 };
+
+// The wire name of an ErrorType, for logging. A command that fails returns one
+// of these to the client and otherwise leaves no trace, which makes a refused
+// request indistinguishable from one that was never sent.
+inline const char* ErrorTypeName(ErrorType e) {
+    switch (e) {
+    case ErrorType::NoError:
+        return "NoError";
+    case ErrorType::Malformed:
+        return "Malformed";
+    case ErrorType::Invalid:
+        return "Invalid";
+    case ErrorType::InvalidInput:
+        return "InvalidInput";
+    case ErrorType::TooSoon:
+        return "TooSoon";
+    case ErrorType::LoginError:
+        return "LoginError";
+    case ErrorType::LoginAlreadyLoggedIn:
+        return "LoginAlreadyLoggedIn";
+    case ErrorType::LoginInvalidUsername:
+        return "LoginInvalidUsername";
+    case ErrorType::LoginInvalidPassword:
+        return "LoginInvalidPassword";
+    case ErrorType::LoginInvalidToken:
+        return "LoginInvalidToken";
+    case ErrorType::CreationError:
+        return "CreationError";
+    case ErrorType::CreationExistingUsername:
+        return "CreationExistingUsername";
+    case ErrorType::CreationBannedEmailProvider:
+        return "CreationBannedEmailProvider";
+    case ErrorType::CreationExistingEmail:
+        return "CreationExistingEmail";
+    case ErrorType::RoomMissing:
+        return "RoomMissing";
+    case ErrorType::RoomAlreadyJoined:
+        return "RoomAlreadyJoined";
+    case ErrorType::RoomFull:
+        return "RoomFull";
+    case ErrorType::RoomPasswordMismatch:
+        return "RoomPasswordMismatch";
+    case ErrorType::RoomPasswordMissing:
+        return "RoomPasswordMissing";
+    case ErrorType::RoomGroupNoJoinLabel:
+        return "RoomGroupNoJoinLabel";
+    case ErrorType::RoomGroupFull:
+        return "RoomGroupFull";
+    case ErrorType::RoomGroupJoinLabelNotFound:
+        return "RoomGroupJoinLabelNotFound";
+    case ErrorType::RoomGroupMaxSlotMismatch:
+        return "RoomGroupMaxSlotMismatch";
+    case ErrorType::Unauthorized:
+        return "Unauthorized";
+    case ErrorType::DbFail:
+        return "DbFail";
+    case ErrorType::EmailFail:
+        return "EmailFail";
+    case ErrorType::NotFound:
+        return "NotFound";
+    case ErrorType::Blocked:
+        return "Blocked";
+    case ErrorType::AlreadyFriend:
+        return "AlreadyFriend";
+    case ErrorType::ScoreNotBest:
+        return "ScoreNotBest";
+    case ErrorType::ScoreInvalid:
+        return "ScoreInvalid";
+    case ErrorType::ScoreHasData:
+        return "ScoreHasData";
+    case ErrorType::CondFail:
+        return "CondFail";
+    case ErrorType::Unsupported:
+        return "Unsupported";
+    case ErrorType::TooLarge:
+        return "TooLarge";
+    }
+    return "Unknown";
+}
