@@ -261,8 +261,6 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdGetUserInfoList(se, reply);
     case CommandType::SendRoomMessage:
         return CmdSendRoomMessage(se, reply);
-    case CommandType::RequestSignalingInfos:
-        return CmdRequestSignalingInfos(se, reply);
     case CommandType::PeerSessionBegin:
         return CmdPeerSessionBegin(se, reply);
     case CommandType::PeerSignal:

@@ -100,7 +100,6 @@ void ConfigManager::Parse(const QString& path) {
 
     m_host = str("Host", "127.0.0.1");
     m_unsecured_port = str("UnsecuredPort", "31313");
-    m_matchingUdpPort = str("MatchingUdpPort", "31314");
     m_webapiPort = str("WebApiPort", "31315");
     m_statsEnabled = boolean("StatsEnabled", true);
     m_matching2Enabled = boolean("Matching2Enabled", false);

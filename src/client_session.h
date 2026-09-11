@@ -242,7 +242,6 @@ public:
     ErrorType CmdGetUserInfoList(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetUserInfo(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSendRoomMessage(StreamExtractor& data, QByteArray& reply);
-    ErrorType CmdRequestSignalingInfos(StreamExtractor& data, QByteArray& reply);
 
     // cmd_peer.cpp
     ErrorType CmdPeerSessionBegin(StreamExtractor& data, QByteArray& reply);

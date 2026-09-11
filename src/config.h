@@ -22,10 +22,6 @@ public:
         QReadLocker lk(&m_lock);
         return m_unsecured_port;
     }
-    QString GetMatchingUdpPort() const {
-        QReadLocker lk(&m_lock);
-        return m_matchingUdpPort;
-    }
     QString GetWebApiPort() const {
         QReadLocker lk(&m_lock);
         return m_webapiPort;
@@ -198,7 +194,6 @@ private:
     // config values
     QString m_host = "0.0.0.0";
     QString m_unsecured_port = "31313";
-    QString m_matchingUdpPort = "31314";
     QString m_webapiPort = "31315";
     bool m_statsEnabled = true;
     bool m_matching2Enabled = false;

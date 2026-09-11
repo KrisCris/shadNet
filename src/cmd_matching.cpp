@@ -1231,49 +1231,6 @@ ErrorType ClientSession::CmdSetUserInfo(StreamExtractor& data, QByteArray& reply
     return ErrorType::NoError;
 }
 
-ErrorType ClientSession::CmdRequestSignalingInfos(StreamExtractor& data, QByteArray& reply) {
-    shadnet::RequestSignalingInfosRequest req;
-    if (!decodeProto(req, data) || data.error())
-        return ErrorType::Malformed;
-
-    QString targetNpid = QString::fromStdString(req.target_npid());
-
-    QString targetIp;
-    uint16_t targetPort = 0;
-    uint16_t targetMemberId = 0;
-    {
-        QReadLocker lk(&m_shared->matching.roomsLock);
-        for (auto it = m_shared->matching.rooms.constBegin();
-             it != m_shared->matching.rooms.constEnd(); ++it) {
-            if (it.key().first != m_matching.matchingKey)
-                continue;
-            const RoomMember* tm = it.value().findByNpid(targetNpid);
-            if (tm) {
-                targetMemberId = tm->memberId;
-                if (targetIp.isEmpty()) {
-                    targetIp = tm->addr;
-                    targetPort = tm->port;
-                }
-                break;
-            }
-        }
-    }
-    if (targetIp.isEmpty())
-        return ErrorType::NotFound;
-
-    qInfo() << "RequestSignalingInfos:" << m_info.npid << "->" << targetNpid
-            << "(mid=" << targetMemberId << ") target=" << targetIp << ":" << targetPort;
-
-    shadnet::RequestSignalingInfosReply rep;
-    rep.set_target_npid(targetNpid.toStdString());
-    rep.set_target_ip(targetIp.toStdString());
-    rep.set_target_port(targetPort);
-    rep.set_target_member_id(targetMemberId);
-    appendProto(reply, rep);
-
-    return ErrorType::NoError;
-}
-
 ErrorType ClientSession::CmdSendRoomMessage(StreamExtractor& data, QByteArray& reply) {
     shadnet::SendRoomMessageRequest req;
     if (!decodeProto(req, data) || data.error())

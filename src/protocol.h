@@ -54,7 +54,9 @@ enum class CommandType : uint16_t {
     JoinRoom = 102,
     LeaveRoom = 103,
     SearchRoom = 104,
-    RequestSignalingInfos = 105,
+    // 105 was RequestSignalingInfos, which handed out a peer's UDP endpoint
+    // from the STUN registry. Both are gone; peers are reached through the
+    // peer-session commands below. The number stays retired.
     ContextStop = 106,
     SetUserInfo = 107,
     SetRoomDataInternal = 108,
