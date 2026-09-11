@@ -98,7 +98,7 @@ Stored in `MatchingSharedState::rooms`, keyed by `(matchingKey, roomId)`.
 | `memberId` | u16 | Unique ID within the room |
 | `userId` | i64 | Server account ID |
 | `npid` | string | Player's NP ID |
-| `addr` / `port` | string / u16 | UDP endpoint (from STUN `udpExt`) |
+| `addr` / `port` | string / u16 | Endpoint the member reported for itself. Since the peer transport moved to ICE this is a virtual address in `198.18.0.0/15`, which identifies a peer but does not route. Nothing on the server dials it. |
 | `joinDate` | u64 | Join timestamp (usec) |
 | `flagAttr` | u32 | Member flags (owner bit, etc.) |
 | `teamId` | u8 | Team identifier |
@@ -122,7 +122,6 @@ Thread-safe shared state protected by `QReadWriteLock`. Lock ordering: `roomsLoc
 | `nextRoomId` | atomic u64 | Monotonically increasing room ID generator |
 | `worldConfigs` | map | matchingKey → [WorldConfig] (from `worlds.cfg`) |
 | `titleGroups` | map | titleId → group name (from `worlds.cfg`) |
-| `udpExt` | map | npid → (ip, port) — external UDP endpoints discovered by STUN |
 
 ---
 
@@ -248,19 +247,14 @@ Retrieve rooms for a world/lobby in this matching key, filtered by attributes.
 
 ---
 
-### RequestSignalingInfos (17)
+### RequestSignalingInfos (17) -- removed
 
-Look up a peer's UDP endpoint for P2P. On-demand only — no signaling state machine.
+Handed out a peer's UDP endpoint from the STUN registry. Both the registry
+and the STUN listener are gone: a peer is reached by opening a peer session
+and exchanging ICE candidates through it, which works behind NATs that no
+amount of endpoint lookup could get through. See signaling.md.
 
-**Request:** `RequestSignalingInfosRequest { target_npid }`
-
-**Reply:** `ErrorType(u8)` + `RequestSignalingInfosReply` (target_npid, target_ip, target_port, target_member_id).
-
-**Endpoint resolution order:**
-1. `udpExt` map (populated by STUN ping).
-2. Fallback: search the caller's rooms for a member with that npid.
-
-No notifications.
+The command number stays retired rather than reused.
 
 ---
 

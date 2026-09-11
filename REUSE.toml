@@ -34,6 +34,7 @@ path = [
     "documentation/matching.md",
     "documentation/protocol.md",
     "documentation/signaling.md",
+    "documentation/turn-deployment.md",
     "externals/CMakeLists.txt",
 ]
 

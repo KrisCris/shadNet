@@ -1,14 +1,16 @@
-# Signaling (STUN Server)
+# Signaling (peer sessions and ICE)
 
-UDP-based NAT-discovery service. Runs alongside the main TCP server on a separate UDP port. Its sole job is to record each client's external UDP endpoint so peers can be located for P2P.
+How two players' emulators find a path to each other. The server pairs them and relays the ICE exchange; it never carries game traffic and never parses what it relays.
 
 ---
 
 ## Overview
 
-shadnet's signaling responsibility is narrow: **endpoint discovery only**. A client pings the STUN server over UDP; the server records the client's external IP:port (as seen from the server) into `udpExt`. That endpoint is later handed out on demand via the TCP `RequestSignalingInfos` command (see matching.md).
+A peer session pairs two authenticated accounts for one connectivity attempt. Through it, each side sends the other its ICE description and candidates, and libjuice on the client does the actual hole punching. shadNet's part is only the rendezvous, plus the handful of facts both sides must agree on before they can talk: who offers, which attempt this is, and what address each player is known by inside the emulated P2P namespace.
 
-The server does **not** drive any connection-state machine. There is no symmetric handshake, no activation-intent registration, and no established/dead events on the shadnet side. All NpMatching2 / NpSignaling connection-state events (ESTABLISHED, DEAD, activation) are produced by the emulator's matching2-signaling layer, not by shadnet.
+This replaced a UDP STUN listener that recorded each client's external endpoint and handed it out on request. That approach can only work when the endpoint the server observes is an endpoint the peer can reach, which is false for symmetric NAT and for most carrier-grade NAT — the cases that actually needed the help. It is gone, along with the `udpExt` registry and the `RequestSignalingInfos` command (105, retired).
+
+The server still drives no connection-state machine. ESTABLISHED, DEAD and activation events are produced by the emulator's matching2-signaling layer, not here.
 
 ---
 
@@ -16,91 +18,119 @@ The server does **not** drive any connection-state machine. There is no symmetri
 
 | Setting | Default | Description |
 |---|---|---|
-| `MatchingUdpPort` | `31314` | UDP port the STUN server listens on |
+| `IceStunHost` | (empty) | STUN server handed to clients. Empty disables STUN. |
+| `IceStunPort` | `3478` | |
+| `IceTurnHost` | (empty) | TURN relay handed to clients. Empty disables TURN. |
+| `IceTurnPort` | `3478` | |
+| `IceTurnSecret` | (empty) | Shared secret for coturn's `use-auth-secret`. Both this and `IceTurnHost` must be set, or no TURN server is offered. |
+| `IceTurnTtlSeconds` | `3600` | Lifetime of an issued TURN credential. |
 
-Set in `shadnet.cfg`. The STUN server binds to the same `Host` address as the TCP server.
+Set in `shadnet.cfg`. There is no UDP listener any more; the server binds TCP only. See `turn-deployment.md` for standing up the relay itself.
 
 ---
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        ShadNetServer                         │
-│                                                              │
-│  ┌──────────────────┐         ┌──────────────────────────┐  │
-│  │   TCP Listener   │         │      StunServer (UDP)    │  │
-│  │   port 31313     │         │      port 31314          │  │
-│  │                  │         │                          │  │
-│  │  ClientSession   │ ◄──────►│  HandleStunPing (0x01)   │  │
-│  │  └─ RequestSig.  │ shared  │                          │  │
-│  └──────────────────┘  state  └──────────────────────────┘  │
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │              MatchingSharedState                        │ │
-│  │  udpExt:  npid → (external_ip, external_port)          │ │
-│  └────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
+```text
+     player A                     ShadNetServer                   player B
+  ┌────────────┐               ┌───────────────────┐           ┌────────────┐
+  │ libjuice   │   TCP 31313   │ SessionCoordinator │ TCP 31313 │ libjuice   │
+  │ ICE agent  │◄─────────────►│ pairs A and B,     │◄─────────►│ ICE agent  │
+  └─────┬──────┘  cmd 120-123  │ assigns roles and  │ notif 20-22└─────┬─────┘
+        │                      │ virtual addresses  │                  │
+        │                      └───────────────────┘                   │
+        │                                                              │
+        └────────────── game datagrams, direct or via TURN ────────────┘
+                             (never through shadNet)
 ```
 
 ---
 
-## STUN Server Protocol
+## Commands
 
-The STUN server communicates over raw UDP datagrams. A signaling vport header is stripped first; the remaining payload starts with a 1-byte command identifier. IP addresses are 4 bytes in **network byte order**; ports are 2 bytes in network byte order. NP IDs are 16 bytes, null-padded.
+### PeerSessionBegin (120)
 
-Only one command is handled (`0x01`). Unknown commands are ignored.
+Opens the session, or joins the one the peer already opened. Both players ring this bell independently as soon as each decides it wants the other, so the common case is a race: the second caller joins the first caller's session rather than opening a second one. The pair is keyed on `(offerer, answerer, titleId, attempt)`, ordered so both call directions produce the same key.
 
----
+**Request:** `PeerSessionBeginRequest { target_npid, title_id, attempt }`
 
-### HandleStunPing (Command 0x01)
+**Reply:** `PeerSessionBeginReply { session_id, generation, is_offerer, local_virtual_addr, peer_virtual_addr, peer_npid }`
 
-NAT-traversal discovery. The client sends its NP ID and local IP; the server replies with the client's external IP and port as seen from the server.
+**Side effect:** sends `PeerSessionOpened` (notification 20) to the target. The caller learns of the session from the reply and the peer learns of the same session from a notification; both converge on the same handler.
 
-**Request datagram (21 bytes):**
-```
-Offset  Size  Field      Description
-──────  ────  ─────────  ────────────────────────────────────────
-0       1     cmd        0x01
-1       16    npid       NP ID, null-padded to 16 bytes
-17      4     localIp    Client's local IP (network order)
-```
+`is_offerer` is the server's decision, and it is what keeps the ICE roles apart. libjuice offers no way to set a role explicitly — whichever API call comes first decides it — so the offerer describes itself immediately and becomes controlling, and the answerer waits for that description and becomes controlled. Two controlling agents can still reach a connection, so a working connection is not evidence the roles were assigned correctly; the client asserts on libjuice's own log instead.
 
-**Reply datagram (6 bytes):**
-```
-Offset  Size  Field         Description
-──────  ────  ────────────  ────────────────────────────────────────
-0       4     externalIp    Client's external IP as seen by server (network order)
-4       2     externalPort  Client's external port as seen by server (network order)
-```
-
-**Side effects:**
-- Stores `npid → (externalIp, externalPort)` in `MatchingSharedState.udpExt`.
-
-**Purpose:** Lets the client learn its public-facing UDP endpoint, and lets the server resolve peer endpoints for `RequestSignalingInfos`.
+`title_id` is part of the pairing key. Two players sending different title ids open two sessions instead of joining one.
 
 ---
 
-## Peer endpoint lookup
+### PeerSignal (121)
 
-Endpoint discovery completes on the TCP side via `RequestSignalingInfos` (matching command 17, documented in matching.md):
+Relays one ICE message to the other participant.
 
-1. Client pings the STUN server (UDP 0x01) → its `udpExt` entry is recorded.
-2. Client calls `RequestSignalingInfos { target_npid }` (TCP).
-3. Server replies with the target's IP/port from `udpExt` (falling back to a room member's stored addr/port).
+**Request:** `PeerSignalRequest { session_id, generation, kind, payload }`, where `kind` is description, candidate, or gathering-done.
 
-From there, P2P hole-punching and connection-state tracking happen on the client/emulator side.
+**Reply:** `PeerSignalReply` (empty).
+
+**Forwarded as:** `NotifyPeerSignal { session_id, generation, kind, payload, from_npid }` (notification 21).
+
+The payload is opaque. The server checks that the sender is a current participant of that session at that generation, looks up the other one, and forwards the bytes unread. Authorisation comes from the authenticated connection, never from the request, so a client cannot signal on another account's behalf.
+
+Only the payload's length is ever logged. An ICE description carries the session's short-term credentials.
+
+`ErrorType::NotFound` from this command means the peer is offline, not that the session is unknown.
 
 ---
 
-## Shared State
+### PeerSessionEnd (122)
 
-### udpExt
+Ends the session and notifies the other participant with `NotifyPeerSessionClosed` (notification 22).
 
-```
-Key:   npid (QString)
-Value: (externalIp, externalPort) — QPair<QString, u16>
-Lock:  udpLock (QReadWriteLock)
-```
+**Request:** `PeerSessionEndRequest { session_id, generation, reason }`
 
-Written by `HandleStunPing` (UDP). Read by `RequestSignalingInfos` (TCP) to resolve peer endpoints. An entry is implicitly stale on disconnect and overwritten on the next ping.
+**Reply:** `PeerSessionEndReply` (empty).
+
+Ending a session that is already gone is success, not an error: both peers end independently, and the second one must not see a failure. A client that disconnects has every session naming it dropped, so a peer waiting on it stops being told the session lives.
+
+---
+
+### GetIceServers (123)
+
+Returns the STUN and TURN servers this client should use.
+
+**Reply:** `GetIceServersReply { servers: [IceServer { host, port, is_turn, username, credential, expires_at }] }`
+
+TURN credentials are minted per request in coturn's `use-auth-secret` form: the username is `<expiry-unix-seconds>:<npid>` and the credential is `base64(HMAC-SHA1(secret, username))`. The relay validates credentials it was never told about, and `IceTurnSecret` never leaves the server.
+
+An empty `IceStunHost`, or a TURN host without a secret, simply omits that entry. Peers then fall back to host candidates, which is enough on a LAN and generally not enough across the internet.
+
+---
+
+## Generations
+
+A session id survives a retry; the generation does not. `Renew` bumps the generation while keeping the id, and every forwarded signal is gated on the current one, so a straggling candidate from a failed attempt is rejected rather than mixed into the new attempt. The client bumps `attempt` for the same reason one level up: a retry gets a genuinely new session rather than rejoining the one that just failed.
+
+---
+
+## Virtual addresses
+
+Each participant is assigned an address from `198.18.0.0/15` (the RFC 2544 benchmarking range) for the life of the session.
+
+This is identity, not routing. The range is not routable on the public internet and is not one home networks hand out, which is the point. The emulated game asks for an IPv4 address for its peer and gets one; because nothing ever addresses a real packet to it, a bug in the layer above surfaces as a dropped datagram rather than as traffic sent to a stranger who happens to own that range.
+
+Values are host byte order on the wire and on the server. The client converts once, on receipt.
+
+---
+
+## Shared state
+
+### SessionCoordinator
+
+| Field | Description |
+|---|---|
+| `m_sessions` | sessionId → Session |
+| `m_byPair` | (offerer, answerer, titleId, attempt) → sessionId |
+| `m_nextSessionId` | Monotonic session id generator |
+| `m_virtualCursor` | Cursor into the virtual address range |
+
+Guarded by its own `QReadWriteLock`, independent of the matching locks.
