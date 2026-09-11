@@ -150,6 +150,20 @@ if(BUILD_TESTING)
     target_link_libraries(test_peer_sessions PRIVATE Qt6::Core)
     add_test(NAME peer_sessions COMMAND test_peer_sessions)
 
+    # Decodes a fixture the CLIENT encoded with its own copy of shadnet.proto.
+    # The two files are hand-synced, so drift compiles cleanly on both sides
+    # and only shows up when the wire actually crosses between them.
+    add_executable(test_peer_proto_decode
+        tests/test_peer_proto_decode.cpp
+        "${PROTO_OUT}/shadnet.pb.cc"
+    )
+    target_include_directories(test_peer_proto_decode PRIVATE
+        src
+        "${PROTO_OUT}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/externals/protobuf/src"
+    )
+    target_link_libraries(test_peer_proto_decode PRIVATE libprotobuf)
+
     add_executable(bloodborne_matching_guest_probe EXCLUDE_FROM_ALL
         tests/bloodborne_matching_guest_probe.cpp
         "${PROTO_OUT}/shadnet.pb.cc"
