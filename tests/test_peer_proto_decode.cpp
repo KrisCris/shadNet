@@ -42,11 +42,10 @@ public:
     if (m_pos + 4 > m_data.size()) {
       return false;
     }
-    const uint32_t length =
-        static_cast<uint32_t>(m_data[m_pos]) |
-        (static_cast<uint32_t>(m_data[m_pos + 1]) << 8) |
-        (static_cast<uint32_t>(m_data[m_pos + 2]) << 16) |
-        (static_cast<uint32_t>(m_data[m_pos + 3]) << 24);
+    const uint32_t length = static_cast<uint32_t>(m_data[m_pos]) |
+                            (static_cast<uint32_t>(m_data[m_pos + 1]) << 8) |
+                            (static_cast<uint32_t>(m_data[m_pos + 2]) << 16) |
+                            (static_cast<uint32_t>(m_data[m_pos + 3]) << 24);
     m_pos += 4;
     if (m_pos + length > m_data.size()) {
       return false;

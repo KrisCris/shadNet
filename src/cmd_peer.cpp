@@ -35,9 +35,9 @@ ErrorType ClientSession::CmdPeerSessionBegin(StreamExtractor& data, QByteArray& 
         return ErrorType::InvalidInput;
 
     const QString titleId = QString::fromStdString(req.title_id());
-    const Peer::Session session = m_shared->peers.BeginOrJoin(
-        m_info.npid, targetNpid, titleId, req.attempt(),
-        QDateTime::currentDateTimeUtc().toMSecsSinceEpoch());
+    const Peer::Session session =
+        m_shared->peers.BeginOrJoin(m_info.npid, targetNpid, titleId, req.attempt(),
+                                    QDateTime::currentDateTimeUtc().toMSecsSinceEpoch());
 
     const bool isOfferer = session.offererNpid == m_info.npid;
 
@@ -152,7 +152,7 @@ ErrorType ClientSession::CmdGetIceServers(QByteArray& reply) {
     if (!turnHost.isEmpty() && !turnSecret.isEmpty()) {
         const Peer::TurnCredential credential =
             Peer::MakeTurnCredential(m_info.npid, turnSecret, QDateTime::currentSecsSinceEpoch(),
-                               config->GetIceTurnTtlSeconds());
+                                     config->GetIceTurnTtlSeconds());
         shadnet::IceServer* server = rep.add_servers();
         server->set_host(turnHost.toStdString());
         server->set_port(config->GetIceTurnPort());

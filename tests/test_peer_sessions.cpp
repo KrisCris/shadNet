@@ -219,8 +219,8 @@ int main() {
   // implementation.
   {
     const Peer::TurnCredential c = Peer::MakeTurnCredential(
-        QStringLiteral("connlost"), QByteArrayLiteral("testsecret"),
-        1757548800, 3600);
+        QStringLiteral("connlost"), QByteArrayLiteral("testsecret"), 1757548800,
+        3600);
     CHECK(c.expiresAt == 1757552400ull);
     CHECK(c.username == QStringLiteral("1757552400:connlost"));
     // Fixed vector, computed independently of this code:
