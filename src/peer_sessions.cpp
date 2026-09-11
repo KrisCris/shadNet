@@ -56,8 +56,8 @@ Session SessionCoordinator::BeginOrJoin(const QString& selfNpid, const QString& 
     session.answererNpid = answerer;
     session.titleId = titleId;
     session.attempt = attempt;
-    session.offererVirtualAddr = NextVirtualAddrLocked();
-    session.answererVirtualAddr = NextVirtualAddrLocked();
+    session.offererVirtualAddr = VirtualAddrForLocked(offerer);
+    session.answererVirtualAddr = VirtualAddrForLocked(answerer);
     session.createdAtMs = nowMs;
 
     m_sessions.insert(session.sessionId, session);
@@ -116,12 +116,26 @@ QList<Session> SessionCoordinator::DropParticipant(const QString& npid) {
         dropped.append(it.value());
         it = m_sessions.erase(it);
     }
+    // The lease ends with the connection. Holding it would consume the range
+    // for players who have gone, and a reconnecting account has no claim on
+    // the address its peers have already stopped using.
+    m_addrByNpid.remove(npid);
     return dropped;
 }
 
 int SessionCoordinator::SessionCount() const {
     QReadLocker lk(&m_lock);
     return static_cast<int>(m_sessions.size());
+}
+
+quint32 SessionCoordinator::VirtualAddrForLocked(const QString& npid) {
+    const auto existing = m_addrByNpid.constFind(npid);
+    if (existing != m_addrByNpid.constEnd()) {
+        return existing.value();
+    }
+    const quint32 addr = NextVirtualAddrLocked();
+    m_addrByNpid.insert(npid, addr);
+    return addr;
 }
 
 quint32 SessionCoordinator::NextVirtualAddrLocked() {

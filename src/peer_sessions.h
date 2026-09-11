@@ -25,6 +25,12 @@ namespace Peer {
 // which is not routable on the public internet and is not a range home
 // networks hand out. Values are host byte order here and on the wire; the
 // client converts once, on receipt.
+//
+// One address per account, not per session. A player in a three-player room
+// has a session with each of the other two, and its address is what their
+// socket layers see as the source of its datagrams and what it advertises
+// into room data. If a third player joining moved it, the first two would
+// still be addressing it by the old one.
 inline constexpr quint32 kVirtualRangeFirst = 0xC6120000u; // 198.18.0.0
 inline constexpr quint32 kVirtualRangeLast = 0xC613FFFFu;  // 198.19.255.255
 
@@ -111,9 +117,17 @@ private:
 
     quint32 NextVirtualAddrLocked();
 
+    // The address leased to this account, allocating one on first use.
+    quint32 VirtualAddrForLocked(const QString& npid);
+
     mutable QReadWriteLock m_lock;
     QHash<quint64, Session> m_sessions;
     QMap<PairKey, quint64> m_byPair;
+
+    // npid -> virtual address, held for as long as the account is
+    // connected. Not per session: a player in two sessions is one player,
+    // and both peers have to see it at the same address.
+    QHash<QString, quint32> m_addrByNpid;
     quint64 m_nextSessionId = 1;
     quint32 m_virtualCursor = 0;
 };

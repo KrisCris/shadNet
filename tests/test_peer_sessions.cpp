@@ -104,19 +104,83 @@ int main() {
     CHECK(session.VirtualAddrOf(QStringLiteral("nobody")) == 0);
   }
 
-  // Successive sessions must not hand out the same address twice in a row.
+  // Two different pairs must not be handed the same address.
   {
     Peer::SessionCoordinator coordinator;
     const Peer::Session a = coordinator.BeginOrJoin(
         QStringLiteral("connlost"), QStringLiteral("MintCoffeeCat"),
         QStringLiteral("CUSA03173"), 1, kNow);
     const Peer::Session b = coordinator.BeginOrJoin(
-        QStringLiteral("connlost"), QStringLiteral("MintCoffeeCat"),
-        QStringLiteral("CUSA03173"), 2, kNow);
+        QStringLiteral("Hunter"), QStringLiteral("Doll"),
+        QStringLiteral("CUSA03173"), 1, kNow);
     CHECK(a.offererVirtualAddr != b.offererVirtualAddr);
     CHECK(a.offererVirtualAddr != b.answererVirtualAddr);
     CHECK(a.answererVirtualAddr != b.offererVirtualAddr);
     CHECK(a.answererVirtualAddr != b.answererVirtualAddr);
+  }
+
+  // Three players in one room, each paired with the other two.
+  //
+  // A player's virtual address is its identity: it is what the peer's socket
+  // layer sees as the source of every datagram, and what the player itself
+  // advertises into room data. A third player joining must not change what
+  // the first two already know, so an account's address has to be the same in
+  // every session it takes part in.
+  {
+    Peer::SessionCoordinator coordinator;
+    const QString first = QStringLiteral("connlost");
+    const QString second = QStringLiteral("MintCoffeeCat");
+    const QString third = QStringLiteral("PaleBlood");
+    const QString title = QStringLiteral("CUSA03173");
+
+    const Peer::Session ab = coordinator.BeginOrJoin(first, second, title, 1, kNow);
+    const Peer::Session ac = coordinator.BeginOrJoin(first, third, title, 1, kNow);
+    const Peer::Session bc = coordinator.BeginOrJoin(second, third, title, 1, kNow);
+
+    CHECK(coordinator.SessionCount() == 3);
+
+    CHECK(ab.VirtualAddrOf(first) == ac.VirtualAddrOf(first));
+    CHECK(ab.VirtualAddrOf(second) == bc.VirtualAddrOf(second));
+    CHECK(ac.VirtualAddrOf(third) == bc.VirtualAddrOf(third));
+
+    // And the three players must still be distinguishable from each other.
+    CHECK(ab.VirtualAddrOf(first) != ab.VirtualAddrOf(second));
+    CHECK(ab.VirtualAddrOf(first) != ac.VirtualAddrOf(third));
+    CHECK(ab.VirtualAddrOf(second) != ac.VirtualAddrOf(third));
+  }
+
+  // A retry must not move a player either. The peers that are already talking
+  // to it did not retry, and the address it advertised into room data does not
+  // change because one of its connections was re-rung.
+  {
+    Peer::SessionCoordinator coordinator;
+    const Peer::Session first = coordinator.BeginOrJoin(
+        QStringLiteral("connlost"), QStringLiteral("MintCoffeeCat"),
+        QStringLiteral("CUSA03173"), 1, kNow);
+    const Peer::Session second = coordinator.BeginOrJoin(
+        QStringLiteral("connlost"), QStringLiteral("MintCoffeeCat"),
+        QStringLiteral("CUSA03173"), 2, kNow);
+
+    // A different session, but the same two players in it.
+    CHECK(first.sessionId != second.sessionId);
+    CHECK(first.offererVirtualAddr == second.offererVirtualAddr);
+    CHECK(first.answererVirtualAddr == second.answererVirtualAddr);
+  }
+
+  // An account that disconnects gives its address up, so the range is not
+  // consumed by players who have gone.
+  {
+    Peer::SessionCoordinator coordinator;
+    const Peer::Session before = coordinator.BeginOrJoin(
+        QStringLiteral("connlost"), QStringLiteral("MintCoffeeCat"),
+        QStringLiteral("CUSA03173"), 1, kNow);
+    coordinator.DropParticipant(QStringLiteral("connlost"));
+    const Peer::Session after = coordinator.BeginOrJoin(
+        QStringLiteral("connlost"), QStringLiteral("MintCoffeeCat"),
+        QStringLiteral("CUSA03173"), 1, kNow);
+    // Reconnecting is a new lease, not the old one.
+    CHECK(after.VirtualAddrOf(QStringLiteral("connlost")) !=
+          before.VirtualAddrOf(QStringLiteral("connlost")));
   }
 
   // After renewal the old generation is stale. A late packet carrying it must
