@@ -66,6 +66,7 @@ set(SOURCES
     # Matchmaking
     src/matching.h
     src/cmd_matching.cpp
+    src/peer_sessions.cpp
     src/stun_server.h
     src/stun_server.cpp
     # WebAPI HTTP/JSON listener
@@ -139,6 +140,14 @@ if(BUILD_TESTING)
     target_include_directories(test_bloodborne_summon_broker PRIVATE src)
     target_link_libraries(test_bloodborne_summon_broker PRIVATE Qt6::Core)
     add_test(NAME bloodborne_summon_broker COMMAND test_bloodborne_summon_broker)
+
+    add_executable(test_peer_sessions
+        tests/test_peer_sessions.cpp
+        src/peer_sessions.cpp
+    )
+    target_include_directories(test_peer_sessions PRIVATE src)
+    target_link_libraries(test_peer_sessions PRIVATE Qt6::Core)
+    add_test(NAME peer_sessions COMMAND test_peer_sessions)
 
     add_executable(bloodborne_matching_guest_probe EXCLUDE_FROM_ALL
         tests/bloodborne_matching_guest_probe.cpp
