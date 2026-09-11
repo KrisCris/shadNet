@@ -69,16 +69,6 @@ bool ShadNetServer::Start(ConfigManager* config) {
         qCritical() << "Plain TCP listen failed:" << m_unsecuredServer->errorString();
     }
 
-    // Start matching/STUN UDP server only when Matching2 is enabled.
-    if (config->IsMatching2Enabled()) {
-        m_stunServer = new StunServer(&m_shared, this);
-        uint16_t udpPort = static_cast<uint16_t>(config->GetMatchingUdpPort().toUInt());
-        if (!m_stunServer->Start(addr, udpPort))
-            qWarning() << "STUN UDP listen failed on port" << udpPort;
-    } else {
-        qInfo() << "Matching2 disabled; STUN UDP listener not started";
-    }
-
     // Read-only stats HTTP server (live usage + public leaderboards), own port.
     if (config->IsStatsEnabled()) {
         m_statsServer = std::make_unique<StatsServer>(this);

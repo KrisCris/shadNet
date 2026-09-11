@@ -68,8 +68,6 @@ set(SOURCES
     src/cmd_matching.cpp
     src/peer_sessions.cpp
     src/cmd_peer.cpp
-    src/stun_server.h
-    src/stun_server.cpp
     # WebAPI HTTP/JSON listener
     src/webapi_server.h
     src/webapi_server.cpp

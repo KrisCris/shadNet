@@ -215,7 +215,4 @@ struct MatchingSharedState {
 
     QHash<QString, QVector<WorldConfig>> worldConfigs;
     QHash<QString, QString> titleGroups;
-
-    mutable QReadWriteLock udpLock;
-    QHash<QString, QPair<QString, uint16_t>> udpExt;
 };

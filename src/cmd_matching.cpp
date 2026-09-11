@@ -403,15 +403,7 @@ void ClientSession::SendRoomEventToTarget(uint64_t roomId, uint32_t event, uint3
 void ClientSession::GetSelfSignalingAddr(QString& addr, uint16_t& port) const {
     addr.clear();
     port = 0;
-    {
-        QReadLocker lk(&m_shared->matching.udpLock);
-        auto it = m_shared->matching.udpExt.find(m_info.npid);
-        if (it != m_shared->matching.udpExt.end()) {
-            addr = it.value().first;
-            port = it.value().second;
-        }
-    }
-    if (addr.isEmpty() && m_socket)
+    if (m_socket)
         addr = m_socket->peerAddress().toString();
 }
 
@@ -1248,14 +1240,6 @@ ErrorType ClientSession::CmdRequestSignalingInfos(StreamExtractor& data, QByteAr
 
     QString targetIp;
     uint16_t targetPort = 0;
-    {
-        QReadLocker lk(&m_shared->matching.udpLock);
-        auto it = m_shared->matching.udpExt.find(targetNpid);
-        if (it != m_shared->matching.udpExt.end()) {
-            targetIp = it->first;
-            targetPort = it->second;
-        }
-    }
     uint16_t targetMemberId = 0;
     {
         QReadLocker lk(&m_shared->matching.roomsLock);
