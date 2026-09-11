@@ -432,7 +432,8 @@ SummonBroker::AdvertiseResult SummonBroker::Advertise(const QJsonObject& body,
         it->state = State::Delivered;
     }
     if (it->state == State::Delivered) {
-        return {State::Delivered, it->rawClaim, it->hostPlacement};
+        ++it->claimDeliveries;
+        return {State::Delivered, it->rawClaim, it->hostPlacement, it->claimDeliveries};
     }
     return {it->state, {}, {}};
 }

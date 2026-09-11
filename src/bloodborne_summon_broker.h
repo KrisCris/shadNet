@@ -29,6 +29,10 @@ public:
         State state = State::Advertised;
         QByteArray pendingClaim;
         QByteArray pendingHostPlacement;
+        // How many times this same claim has now been handed out. Anything
+        // above 1 means an earlier delivery did not take -- which looks
+        // exactly like a fresh success in the log unless it is counted.
+        int claimDeliveries = 0;
     };
 
     struct ClaimResult {
@@ -75,6 +79,7 @@ private:
         QByteArray hostPlacement;
         qint64 preparationRequester = -1;
         qint64 updatedAtMs = 0;
+        int claimDeliveries = 0;
     };
 
     void PurgeExpiredLocked(qint64 nowMs);

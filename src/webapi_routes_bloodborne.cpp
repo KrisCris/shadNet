@@ -210,7 +210,8 @@ bool DeliverClaimToWaiter(Bloodborne::SummonBroker& broker, ClaimWaiters& waiter
     }
 
     qInfo() << "Bloodborne summon: delivered claim on held create" << key
-            << "host-placement-bytes" << result.pendingHostPlacement.size();
+            << "host-placement-bytes" << result.pendingHostPlacement.size() << "delivery"
+            << result.claimDeliveries;
     waiter->promise->addResult(RawJsonResponse(response, result.pendingHostPlacement));
     waiter->promise->finish();
     return true;
@@ -258,7 +259,19 @@ void RegisterBloodborneRoutes(QHttpServer& http, bool seamlessCoop) {
                        qInfo() << "Bloodborne summon: delivered claim to user"
                                << Integer(*body, QStringLiteral("UserId")) << "session"
                                << body->value(QStringLiteral("SessionId")).toString()
-                               << "host-placement-bytes" << result.pendingHostPlacement.size();
+                               << "host-placement-bytes" << result.pendingHostPlacement.size()
+                               << "delivery" << result.claimDeliveries;
+                       if (result.claimDeliveries > 1) {
+                           // The player has been told about this summon before
+                           // and has not acted on it. Handing it over again is
+                           // correct, but it is not progress, and it reads as
+                           // progress unless the count is on the line.
+                           qWarning()
+                               << "Bloodborne summon: this is delivery" << result.claimDeliveries
+                               << "of the same claim to user"
+                               << Integer(*body, QStringLiteral("UserId"))
+                               << "-- earlier deliveries were not acted on";
+                       }
                        return ReadyFuture(
                            RawJsonResponse(response, result.pendingHostPlacement));
                    }
