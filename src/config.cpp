@@ -105,6 +105,12 @@ void ConfigManager::Parse(const QString& path) {
     m_statsEnabled = boolean("StatsEnabled", true);
     m_matching2Enabled = boolean("Matching2Enabled", false);
     m_bloodborneSeamlessCoop = boolean("BloodborneSeamlessCoop", false);
+    m_iceStunHost = str("IceStunHost", "");
+    m_iceStunPort = static_cast<quint16>(str("IceStunPort", "3478").toUShort());
+    m_iceTurnHost = str("IceTurnHost", "");
+    m_iceTurnPort = static_cast<quint16>(str("IceTurnPort", "3478").toUShort());
+    m_iceTurnSecret = str("IceTurnSecret", "").toUtf8();
+    m_iceTurnTtlSeconds = str("IceTurnTtlSeconds", "3600").toLongLong();
     m_trophiesEnabled = boolean("TrophiesEnabled", true);
     m_memberApiEnabled = boolean("MemberApiEnabled", false);
     m_memberApiHost = str("MemberApiHost", "127.0.0.1");

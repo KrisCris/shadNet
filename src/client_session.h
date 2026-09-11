@@ -18,6 +18,7 @@
 #include <database.h>
 #include "config.h"
 #include "matching_types.h"
+#include "peer_sessions.h"
 #include "protocol.h"
 #include "score_cache.h"
 #include "score_db.h"
@@ -63,6 +64,11 @@ struct SharedState {
 
     // Matchmaking shared state
     MatchingSharedState matching;
+
+    // ICE peer sessions, keyed by session id. Independent of matching rooms:
+    // a connection is negotiated for an authorised summon pair before either
+    // side joins a room, so requiring room membership first would deadlock.
+    Peer::SessionCoordinator peers;
 
     // Live usage stats for the read-only stats HTTP server
     mutable QReadWriteLock usageLock;
@@ -237,6 +243,17 @@ public:
     ErrorType CmdSetUserInfo(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSendRoomMessage(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdRequestSignalingInfos(StreamExtractor& data, QByteArray& reply);
+
+    // cmd_peer.cpp
+    ErrorType CmdPeerSessionBegin(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdPeerSignal(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdPeerSessionEnd(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdGetIceServers(QByteArray& reply);
+    // Tells the other participant a session opened or closed, if they are
+    // online. Silent when they are not: the notification is an optimisation,
+    // and the peer learns the same facts from its own Begin.
+    void NotifyPeerSessionOpened(const Peer::Session& session, const QString& recipientNpid);
+    void ClosePeerSessions(const QList<Peer::Session>& sessions, quint32 reason);
     ErrorType CmdSetRoomDataInternal(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetRoomDataExternal(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdKickoutRoomMember(StreamExtractor& data, QByteArray& reply);

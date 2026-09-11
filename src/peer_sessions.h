@@ -5,6 +5,7 @@
 #include <optional>
 #include <tuple>
 
+#include <QByteArray>
 #include <QHash>
 #include <QList>
 #include <QMap>
@@ -60,6 +61,19 @@ struct Session {
         return 0;
     }
 };
+
+// A time-limited TURN credential, in coturn's documented use-auth-secret
+// form: the username carries its own expiry and the password is an HMAC over
+// it, so the relay validates credentials it was never told about and the
+// shared secret never leaves the server.
+struct TurnCredential {
+    QString username;   // "<expiry-unix-seconds>:<npid>"
+    QString credential; // base64(HMAC-SHA1(secret, username))
+    quint64 expiresAt = 0;
+};
+
+TurnCredential MakeTurnCredential(const QString& npid, const QByteArray& secret,
+                                  qint64 nowUnixSeconds, qint64 ttlSeconds);
 
 class SessionCoordinator {
 public:

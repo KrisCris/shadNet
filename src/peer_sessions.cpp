@@ -4,6 +4,9 @@
 
 #include <utility>
 
+#include <QCryptographicHash>
+#include <QMessageAuthenticationCode>
+
 namespace Peer {
 
 namespace {
@@ -16,6 +19,17 @@ std::pair<QString, QString> Ordered(const QString& a, const QString& b) {
 }
 
 } // namespace
+
+TurnCredential MakeTurnCredential(const QString& npid, const QByteArray& secret,
+                                  qint64 nowUnixSeconds, qint64 ttlSeconds) {
+    TurnCredential out;
+    out.expiresAt = static_cast<quint64>(nowUnixSeconds + ttlSeconds);
+    out.username = QStringLiteral("%1:%2").arg(out.expiresAt).arg(npid);
+    out.credential = QString::fromLatin1(
+        QMessageAuthenticationCode::hash(out.username.toUtf8(), secret, QCryptographicHash::Sha1)
+            .toBase64());
+    return out;
+}
 
 Session SessionCoordinator::BeginOrJoin(const QString& selfNpid, const QString& peerNpid,
                                         const QString& titleId, quint32 attempt, qint64 nowMs) {

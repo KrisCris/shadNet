@@ -214,6 +214,43 @@ int main() {
     CHECK(coordinator.SessionCount() == 2);
   }
 
+  // TURN credentials follow coturn's use-auth-secret scheme exactly, so this
+  // asserts against the documented construction rather than restating our own
+  // implementation.
+  {
+    const Peer::TurnCredential c = Peer::MakeTurnCredential(
+        QStringLiteral("connlost"), QByteArrayLiteral("testsecret"),
+        1757548800, 3600);
+    CHECK(c.expiresAt == 1757552400ull);
+    CHECK(c.username == QStringLiteral("1757552400:connlost"));
+    // Fixed vector, computed independently of this code:
+    //   base64(HMAC-SHA1(key="testsecret", msg="1757552400:connlost"))
+    // Recomputing it here with the same Qt call would only restate the
+    // implementation and would pass even if the scheme were wrong.
+    CHECK(c.credential == QStringLiteral("QUGSNM71FCId8R1W5qOaN9uMm0M="));
+  }
+
+  // Two accounts must never share a credential, or the relay cannot attribute
+  // an allocation to one of them.
+  {
+    const Peer::TurnCredential a = Peer::MakeTurnCredential(
+        QStringLiteral("connlost"), QByteArrayLiteral("s"), 0, 60);
+    const Peer::TurnCredential b = Peer::MakeTurnCredential(
+        QStringLiteral("MintCoffeeCat"), QByteArrayLiteral("s"), 0, 60);
+    CHECK(a.username != b.username);
+    CHECK(a.credential != b.credential);
+  }
+
+  // Rotating the secret must invalidate credentials for the same username.
+  {
+    const Peer::TurnCredential a = Peer::MakeTurnCredential(
+        QStringLiteral("connlost"), QByteArrayLiteral("secret-one"), 100, 60);
+    const Peer::TurnCredential b = Peer::MakeTurnCredential(
+        QStringLiteral("connlost"), QByteArrayLiteral("secret-two"), 100, 60);
+    CHECK(a.username == b.username);
+    CHECK(a.credential != b.credential);
+  }
+
   std::cout << "peer session tests passed\n";
   return 0;
 }

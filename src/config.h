@@ -50,6 +50,32 @@ public:
         QReadLocker lk(&m_lock);
         return m_matching2Enabled;
     }
+    // ICE service discovery. Clients ask for these at login; the TURN secret
+    // itself is never returned to a client, only credentials derived from it.
+    QString GetIceStunHost() const {
+        QReadLocker lk(&m_lock);
+        return m_iceStunHost;
+    }
+    quint16 GetIceStunPort() const {
+        QReadLocker lk(&m_lock);
+        return m_iceStunPort;
+    }
+    QString GetIceTurnHost() const {
+        QReadLocker lk(&m_lock);
+        return m_iceTurnHost;
+    }
+    quint16 GetIceTurnPort() const {
+        QReadLocker lk(&m_lock);
+        return m_iceTurnPort;
+    }
+    QByteArray GetIceTurnSecret() const {
+        QReadLocker lk(&m_lock);
+        return m_iceTurnSecret;
+    }
+    qint64 GetIceTurnTtlSeconds() const {
+        QReadLocker lk(&m_lock);
+        return m_iceTurnTtlSeconds;
+    }
     bool IsTrophiesEnabled() const {
         QReadLocker lk(&m_lock);
         return m_trophiesEnabled;
@@ -195,4 +221,12 @@ private:
     QString m_memberApiHost = "0.0.0.0";
     QString m_memberApiPort = "31360";
     QString m_memberApiKey;
+    // ICE / TURN service configuration. Empty TurnHost or TurnSecret disables
+    // relay entirely, leaving plain STUN, which still covers most networks.
+    QString m_iceStunHost;
+    quint16 m_iceStunPort = 3478;
+    QString m_iceTurnHost;
+    quint16 m_iceTurnPort = 3478;
+    QByteArray m_iceTurnSecret;
+    qint64 m_iceTurnTtlSeconds = 3600;
 };

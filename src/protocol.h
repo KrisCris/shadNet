@@ -8,7 +8,7 @@
 
 static constexpr uint32_t HEADER_SIZE = 15;
 static constexpr uint32_t MAX_PACKET_SIZE = 0x800000; // 8 MiB
-static constexpr uint32_t PROTOCOL_VERSION = 1;
+static constexpr uint32_t PROTOCOL_VERSION = 2;
 
 enum class PacketType : uint8_t {
     Request = 0,
@@ -80,6 +80,11 @@ enum class CommandType : uint16_t {
     TusGetFriendsVariable = 212,
     TusDeleteMultiSlotVariable = 213,
     TssGetData = 214,
+    // Peer connectivity (protocol v2)
+    PeerSessionBegin = 120,
+    PeerSignal = 121,
+    PeerSessionEnd = 122,
+    GetIceServers = 123,
     // Trophies
     UnlockTrophy = 301,
     SyncTrophies = 302,
@@ -101,6 +106,12 @@ enum class NotificationType : uint16_t {
     // ClientSession::BuildWebApiPushPayload): npServiceName, npServiceLabel(u32 LE),
     // dataType, data, fromNpid, toNpid.
     WebApiPushEvent = 17,
+    // Peer connectivity (protocol v2). PeerSignal carries an opaque ICE
+    // description or candidate between the two accounts of one peer session;
+    // the server forwards it without parsing.
+    PeerSessionOpened = 20,
+    PeerSignal = 21,
+    PeerSessionClosed = 22,
 };
 
 // Error codes for Reply packets

@@ -263,6 +263,14 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdSendRoomMessage(se, reply);
     case CommandType::RequestSignalingInfos:
         return CmdRequestSignalingInfos(se, reply);
+    case CommandType::PeerSessionBegin:
+        return CmdPeerSessionBegin(se, reply);
+    case CommandType::PeerSignal:
+        return CmdPeerSignal(se, reply);
+    case CommandType::PeerSessionEnd:
+        return CmdPeerSessionEnd(se, reply);
+    case CommandType::GetIceServers:
+        return CmdGetIceServers(reply);
     case CommandType::SetRoomDataInternal:
         return CmdSetRoomDataInternal(se, reply);
     case CommandType::SetRoomDataExternal:
@@ -366,6 +374,11 @@ void ClientSession::CleanupOnDisconnect() {
     // A user's joined-session state is linked to presence: going offline
     // auto-leaves all their sessions (owner-migration / owner-bind teardown)
     WebApiRoutes::PurgeUserFromSessions(*m_shared, m_info.userId);
+
+    // Close this account's ICE peer sessions and tell the peers still waiting
+    // on them, so they fail fast instead of negotiating against a session
+    // whose other side is gone. Reason 3 is logout.
+    ClosePeerSessions(m_shared->peers.DropParticipant(m_info.npid), 3);
 
     // Collect send functions for every online friend before releasing the lock,
     // then remove ourselves from the map.
