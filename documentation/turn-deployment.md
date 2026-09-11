@@ -33,7 +33,7 @@ what it advertises, and no peer on the internet can use it.
 
 This is worth saying on its own, because the inference is tempting and wrong.
 
-Players reach shadNet on `31313/tcp`, `31314/udp` and `31315/tcp`. Those
+Players reach shadNet on `31313/tcp` and `31315/tcp`. Those
 forwards say nothing about `3478` or about `49160-49200`. A server that every
 player connects to fine can host a relay that no player can use.
 
