@@ -29,6 +29,18 @@ The fourth row is the one that cannot be guessed. coturn behind a home router
 sees only its LAN address. Unless you tell it otherwise, that LAN address is
 what it advertises, and no peer on the internet can use it.
 
+On a dynamic address, give `SHADNET_TURN_EXTERNAL_IP` a hostname rather than an
+address. The compose service resolves it at start-up and re-checks it while
+running; when it changes, coturn restarts with the new value. A DDNS name is
+exactly the right thing here.
+
+The record used is the **A** record, unless `SHADNET_TURN_EXTERNAL_FAMILY` says
+`ipv6`. That default is deliberate: `external-ip` exists only to work around
+NAT, and a host with a global IPv6 address already advertises the correct
+address without help. A DDNS name's AAAA also often belongs to the router
+rather than to the machine coturn runs on, and an `external-ip` in a family
+coturn does not listen on names a socket that does not exist.
+
 ## A reachable shadNet is not a reachable relay
 
 This is worth saying on its own, because the inference is tempting and wrong.
@@ -90,11 +102,12 @@ ports, so `31500-31540` is twenty sessions.
    ```
    SHADNET_ICE_TURN_HOST=turn.example.org    # what players are told to contact
    SHADNET_ICE_TURN_SECRET=<the value above>
-   SHADNET_TURN_EXTERNAL_IP=<your public IPv4>
+   SHADNET_TURN_EXTERNAL_IP=turn.example.org   # or a literal public IPv4
    ```
 
-   `SHADNET_TURN_EXTERNAL_IP` must be an address. coturn does not resolve a
-   hostname here.
+   `SHADNET_TURN_EXTERNAL_IP` takes either. A hostname is resolved at start-up
+   and re-checked every `SHADNET_TURN_EXTERNAL_RECHECK_SECONDS` (0 disables),
+   which is what makes a dynamic address survivable.
 
 3. Add the port forwards above.
 
