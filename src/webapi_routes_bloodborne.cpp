@@ -390,7 +390,8 @@ void RegisterBloodborneRoutes(QHttpServer& http, bool seamlessCoop) {
                        qWarning() << "Bloodborne summon: claim target not found"
                                   << "requester=" << body->value(QStringLiteral("UserId"))
                                   << "target-user=" << body->value(QStringLiteral("TargetUserId"))
-                                  << "target-character=" << body->value(QStringLiteral("TargetCharaId"))
+                                  << "target-character="
+                                  << body->value(QStringLiteral("TargetCharaId"))
                                   << "request-session=" << body->value(QStringLiteral("SessionId"));
                        break;
                    case Bloodborne::SummonBroker::ClaimStatus::Conflict:
