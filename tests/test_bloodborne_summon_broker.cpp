@@ -361,6 +361,14 @@ int main() {
     CHECK(!visible(100, 400, 2, "hunt", "hunt"));
     // A password still has to match.
     CHECK(!visible(100, 100, 0, "hunt", "wrong"));
+    CHECK(!visible(100, 100, 0, nullptr, "hunt"));
+
+    // Ordinary invasions ignore passwords, but still enforce the level range.
+    CHECK(visible(91, 71, 2, nullptr, "oldblood"));
+    CHECK(visible(91, 71, 2, "oldblood", nullptr));
+    CHECK(visible(91, 71, 2, "hunt", "wrong"));
+    CHECK(!visible(91, 187, 2, nullptr, "oldblood"));
+    CHECK(!visible(71, 91, 2, "hunt", "wrong"));
   }
 
   std::cout << "Bloodborne summon broker state test passed\n";

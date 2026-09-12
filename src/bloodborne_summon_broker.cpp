@@ -110,7 +110,10 @@ bool MatchesSearch(const QJsonObject& request, const QJsonObject& sign, bool any
 
     const QString requestWord = request.value(QStringLiteral("SummonWord")).toString();
     const QString signWord = sign.value(QStringLiteral("SummonWord")).toString();
-    if (!requestWord.isEmpty() && requestWord != signWord) {
+    const bool isInvasion = static_cast<int>(Integer(sign, QStringLiteral("SummonType"),
+                                                     SummonTypeCoopGuest)) == SummonTypeInvader;
+    // Sinister Bell invasions ignore passwords, including a host's co-op password.
+    if (!isInvasion && !requestWord.isEmpty() && requestWord != signWord) {
         return false;
     }
 
@@ -133,8 +136,6 @@ bool MatchesSearch(const QJsonObject& request, const QJsonObject& sign, bool any
     // what the player can summon.
     const qint64 requestLevel = Integer(request, QStringLiteral("MatchingLevel"), -1);
     const qint64 signLevel = Integer(sign, QStringLiteral("MatchingLevel"), -1);
-    const bool isInvasion = static_cast<int>(Integer(sign, QStringLiteral("SummonType"),
-                                                     SummonTypeCoopGuest)) == SummonTypeInvader;
     // A matching password lifts the level restriction for co-op only; in vanilla
     // it does not affect invasions.
     const bool passwordBypass = !requestWord.isEmpty() && !isInvasion;
