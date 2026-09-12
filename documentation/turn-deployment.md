@@ -138,9 +138,24 @@ ports, so `31500-31540` is twenty sessions.
 
 ## Checking it works
 
-`docker compose logs coturn` tells you whether it started, and nothing more
-useful than that. What matters is whether a player outside your network can
-allocate, and the only way to know is to try from outside.
+The companion Docker configuration sends coturn logs directly to stdout with
+calendar timestamps, so `docker compose logs coturn` includes recent sessions
+without reading a separate file inside the container. An allocation proves
+the client reached TURN; it does not prove a usable end-to-end path. Test
+from outside your network and inspect the selected pair on the clients.
+
+`A peer IP ... denied in the range ...` means a candidate was rejected by
+the relay's address policy. ICE can try private candidates while searching
+for a working pair, so this message can occur during a successful connection.
+Keep the private-address deny rules: removing them lets authenticated clients
+use the relay to reach its private network. Diagnose a connection failure
+from the selected pair and ICE state, not this message alone.
+
+Use `use-auth-secret` without a separate `lt-cred-mech`; coturn enables the
+latter internally for secret-based authentication. The companion deployment
+explicitly disables TLS/DTLS listeners because no TURN certificates are
+configured and shadNet's current transport uses plain TURN. TCP/UDP listeners
+remain available.
 
 On a client, the emulator logs the nominated candidate pair for each peer
 session. A relayed connection shows `typ relay` on at least one side. If you
