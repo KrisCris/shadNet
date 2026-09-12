@@ -38,10 +38,9 @@ bool DeleteAccountAndArtifacts(Database& db, SharedState* shared, int64_t userId
 
 ClientSession::ClientSession(QTcpSocket* socket, SharedState* shared, const QString& dbPath,
                              bool isSsl, QObject* parent)
-    : QObject(parent), m_socket(socket), m_isSsl(isSsl), m_shared(shared),
+    : QObject(parent), m_socket(socket), m_isSsl(isSsl), m_shared(shared), m_dbPath(dbPath),
       m_db(std::make_unique<Database>(QString("sess_%1").arg(reinterpret_cast<quintptr>(this)))) {
     m_socket->setParent(this);
-    m_db->Open(dbPath);
 
     connect(m_socket, &QTcpSocket::readyRead, this, &ClientSession::OnReadyRead);
     connect(m_socket, &QTcpSocket::disconnected, this, &ClientSession::OnDisconnected);
@@ -60,7 +59,7 @@ void ClientSession::Start() {
     m_socket->flush();
 
     const char* mode = m_isSsl ? "TLS" : "plain";
-    qInfo() << "Client connected (" << mode << ") from" << m_socket->peerAddress().toString();
+    qDebug() << "Client connected (" << mode << ") from" << m_socket->peerAddress().toString();
 }
 
 void ClientSession::OnReadyRead() {
@@ -107,6 +106,12 @@ void ClientSession::OnDisconnected() {
 }
 
 void ClientSession::ProcessPacket(uint16_t command, uint64_t packetId, const QByteArray& payload) {
+    // Socket-only health checks do not need a database connection or schema migration.
+    if (!m_db->IsOpen() && !m_db->Open(m_dbPath)) {
+        qWarning() << "Cannot open database for client" << m_socket->peerAddress().toString();
+        m_socket->disconnectFromHost();
+        return;
+    }
     QByteArray reply;
     reply.reserve(256);
     reply.append(static_cast<char>(static_cast<uint8_t>(PacketType::Reply)));
@@ -362,7 +367,7 @@ ErrorType ClientSession::CmdGetServerFeatures(QByteArray& reply) {
 
 void ClientSession::CleanupOnDisconnect() {
     if (!m_authenticated) {
-        qInfo() << "Unauthenticated client disconnected";
+        qDebug() << "Unauthenticated client disconnected";
         return;
     }
 

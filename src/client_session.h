@@ -332,6 +332,7 @@ private:
     SharedState* m_shared;
     bool m_authenticated = false;
     QByteArray m_readBuf;
+    QString m_dbPath;
     std::unique_ptr<Database> m_db;
     ClientInfo m_info;
     MatchingSessionState m_matching;
