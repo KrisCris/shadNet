@@ -15,12 +15,12 @@ and three of them have to be reachable.
 
 | | What it is | Value here | Must be reachable from the internet? |
 | --- | --- | --- | --- |
-| **Listening port** | Where a player's client contacts the relay to ask for an allocation | `3478` udp and tcp | **Yes** |
-| **Relay port range** | The ports the relay allocates and the *other* player sends to | `49160-49200` udp | **Yes, the whole range** |
+| **Listening port** | Where a player's client contacts the relay to ask for an allocation | `31478` udp and tcp | **Yes** |
+| **Relay port range** | The ports the relay allocates and the *other* player sends to | `31500-31540` udp | **Yes, the whole range** |
 | **Bind address** | What coturn listens on inside the container | every interface | no, it is local |
 | **Advertised address** | What coturn *tells* players its relayed candidates are at | `SHADNET_TURN_EXTERNAL_IP` | it is not a port at all |
 
-The second row is the one that gets missed. Forwarding `3478` alone produces a
+The second row is the one that gets missed. Forwarding `31478` alone produces a
 relay that accepts allocations and hands back a candidate nobody can send to.
 The allocation succeeds, the client reports a relay candidate, and the
 connection still fails -- which looks like a bug somewhere else entirely.
@@ -34,8 +34,21 @@ what it advertises, and no peer on the internet can use it.
 This is worth saying on its own, because the inference is tempting and wrong.
 
 Players reach shadNet on `31313/tcp` and `31315/tcp`. Those
-forwards say nothing about `3478` or about `49160-49200`. A server that every
+forwards say nothing about `31478` or about `31500-31540`. A server that every
 player connects to fine can host a relay that no player can use.
+
+## Why not 3478
+
+`3478` is the IANA port for STUN and TURN, and this deployment does not use
+it. Residential ISPs that filter inbound traffic tend to do it on low ports,
+so every port here is five digits. The relay range avoids a second trap: it
+stays below the ephemeral range (`32768-60999` on Linux), because a relay port
+drawn from that range can lose a race to an unrelated outgoing connection, and
+the allocation that fails is one a player was waiting on.
+
+Nothing about the protocol needs the standard port -- clients are told where
+to go. `src/config.cpp` still defaults to `3478` for anyone who does not set
+it; the compose deployment always sets it.
 
 Verify the relay separately, from outside your network, before you trust it.
 
@@ -46,9 +59,9 @@ before changing anything on the router -- nothing here does it for you.
 
 | Protocol | External | Internal | To |
 | --- | --- | --- | --- |
-| UDP | 3478 | 3478 | the shadNet host |
-| TCP | 3478 | 3478 | the shadNet host |
-| UDP | 49160-49200 | 49160-49200 | the shadNet host |
+| UDP | 31478 | 31478 | the shadNet host |
+| TCP | 31478 | 31478 | the shadNet host |
+| UDP | 31500-31540 | 31500-31540 | the shadNet host |
 
 The TCP forward is for clients on networks that block outbound UDP entirely.
 If you would rather not open it, drop it -- those players simply will not get
@@ -56,7 +69,7 @@ a relay.
 
 If you narrow the range, change `min-port` and `max-port` in
 `coturn/turnserver.conf` to match. Each concurrent relayed session uses two
-ports, so `49160-49200` is twenty sessions.
+ports, so `31500-31540` is twenty sessions.
 
 ## Turning it on
 
@@ -103,7 +116,7 @@ ports, so `49160-49200` is twenty sessions.
    ```
    docker compose exec shadnet sh -c 'cat >> /data/shadnet.cfg' <<'CFG'
    IceTurnHost=turn.example.org
-   IceTurnPort=3478
+   IceTurnPort=31478
    IceTurnSecret=<the value above>
    IceTurnTtlSeconds=3600
    CFG
