@@ -123,3 +123,7 @@ Registration is governed by `shadnet.cfg`:
 
 To host a private instance, set a `RegistrationSecretKey` in `shadnet.cfg` and
 share that key only with the people you want to allow to register.
+## Docker deployment
+
+Prebuilt server images, Compose examples, TURN setup and upgrade instructions
+are in [Container deployment](documentation/docker.md).

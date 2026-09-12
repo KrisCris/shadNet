@@ -11,3 +11,6 @@ clientsample/build
 cmake-build-debug/
 # Local out-of-source build used for testing.
 build-linux/
+
+# Deployment secrets are local; only the example belongs in git.
+/deployment/.env

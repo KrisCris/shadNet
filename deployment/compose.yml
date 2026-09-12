@@ -1,0 +1,156 @@
+# SPDX-FileCopyrightText: Copyright 2026 shadNet Project
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+# Linux host networking. Existing shadnet_* data volumes are preserved.
+# Enable the optional services with --profile web and --profile turn.
+
+name: shadnet
+
+services:
+  shadnet:
+    image: ${SHADNET_IMAGE:-ghcr.io/kriscris/shadnet:bloodborne-coop}
+    container_name: shadnet
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - shadnet-data:/data
+    environment:
+      # Applied only when generating shadnet.cfg on first run. After that the
+      # file in the volume wins, so your edits are never silently reverted.
+      SHADNET_HOST: ${SHADNET_BIND_HOST:-0.0.0.0}
+      SHADNET_TCP_PORT: ${SHADNET_TCP_PORT:-31313}
+      SHADNET_WEBAPI_PORT: ${SHADNET_WEBAPI_PORT:-31315}
+      SHADNET_STATS_ENABLED: ${SHADNET_STATS_ENABLED:-false}
+      SHADNET_MATCHING2_ENABLED: ${SHADNET_MATCHING2_ENABLED:-true}
+      SHADNET_SEAMLESS_COOP: ${SHADNET_SEAMLESS_COOP:-false}
+      SHADNET_ADMINS_LIST: ${SHADNET_ADMINS_LIST:-}
+      SHADNET_REGISTRATION_KEY: ${SHADNET_REGISTRATION_KEY:-}
+      # Loopback, and meant literally: with host networking these two really
+      # are only reachable from this machine. They speak plain HTTP and take
+      # passwords in request bodies, so do not widen them.
+      SHADNET_MEMBER_API_HOST: 127.0.0.1
+      SHADNET_ADMIN_API_HOST: 127.0.0.1
+      SHADNET_MEMBER_API_PORT: ${MEMBER_API_PORT:-31360}
+      SHADNET_ADMIN_API_PORT: ${ADMIN_API_PORT:-31350}
+      # Both containers must agree on these. Refusing to start beats starting
+      # with a key only one side knows: the site would then get 401 on every
+      # call and the cause would not be obvious.
+      SHADNET_MEMBER_API_KEY: ${MEMBER_API_KEY:?set MEMBER_API_KEY in .env, e.g. openssl rand -hex 32}
+      SHADNET_ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env, e.g. openssl rand -hex 32}
+      # Dump the raw JSON of every summon advertise/search/claim to the log.
+      # Diagnostic only: it is verbose and echoes player position data, so
+      # leave it empty unless you are working out why two players cannot see
+      # each other. Set to 1 to enable.
+      SHADNET_BLOODBORNE_RE_TRACE: ${SHADNET_BLOODBORNE_RE_TRACE:-}
+
+      # How long, in milliseconds, to hold a summon advertisement's create
+      # request open waiting for somebody to summon that player.
+      #
+      # The game learns it has been summoned only from the reply to its own
+      # once-a-minute SummonDataCreateRequest, while the summoning host gives
+      # up after ~55s -- so answering immediately means the news always arrives
+      # too late. Holding the reply turns that re-post into a long poll.
+      # 0 disables holding and restores plain request/response behaviour.
+      SHADNET_BLOODBORNE_CLAIM_HOLD_MS: ${SHADNET_BLOODBORNE_CLAIM_HOLD_MS:-20000}
+      # Count failed logins against the player, not against the web frontend
+      # every player arrives through. See api_peer.h in the server source.
+      SHADNET_API_TRUSTED_PROXIES: ${SHADNET_API_TRUSTED_PROXIES:-local}
+
+      # What the server hands clients when they ask where to find ICE
+      # servers. STUN only discovers an address; TURN relays traffic when no
+      # direct path exists. Both are optional -- with all of these empty,
+      # peers still connect whenever a direct path is available, which on a
+      # LAN or between two IPv6 hosts is most of the time.
+      #
+      # The secret is shared with coturn and nothing else. It is never
+      # returned by any API and never logged; what a client receives is a
+      # short-lived credential derived from it.
+      SHADNET_ICE_STUN_HOST: ${SHADNET_ICE_STUN_HOST:-}
+      SHADNET_ICE_STUN_PORT: ${SHADNET_ICE_STUN_PORT:-31478}
+      SHADNET_ICE_TURN_HOST: ${SHADNET_ICE_TURN_HOST:-}
+      SHADNET_ICE_TURN_PORT: ${SHADNET_ICE_TURN_PORT:-31478}
+      SHADNET_ICE_TURN_SECRET: ${SHADNET_ICE_TURN_SECRET:-}
+      SHADNET_ICE_TURN_TTL_SECONDS: ${SHADNET_ICE_TURN_TTL_SECONDS:-3600}
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/${SHADNET_TCP_PORT:-31313}' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  web:
+    profiles: ["web"]
+    image: ${SHADNET_WEB_IMAGE:-ghcr.io/kriscris/shadnet-web:main}
+    container_name: shadnet-web
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - shadnet
+    volumes:
+      - web-instance:/app/instance
+    environment:
+      # No port mapping to hide behind: this IS the bind address, and it is
+      # what decides who can load the site.
+      #   127.0.0.1   this machine only
+      #   100.x.y.z   your Tailscale address
+      #   0.0.0.0     every interface -- required if you forward a port here
+      SHADNET_WEB_HOST: ${WEB_BIND_HOST:-127.0.0.1}
+      SHADNET_WEB_PORT: ${WEB_PORT:-8080}
+      SHADNET_WEB_SITE_NAME: ${WEB_SITE_NAME:-shadNet}
+      SHADNET_WEB_ADMIN_CONTACT: ${WEB_ADMIN_CONTACT:-}
+      SHADNET_WEB_BEHIND_PROXY: ${WEB_BEHIND_PROXY:-false}
+      # Loopback, because host networking puts both containers on it.
+      SHADNET_MEMBER_API_URL: http://127.0.0.1:${MEMBER_API_PORT:-31360}
+      SHADNET_MEMBER_API_KEY: ${MEMBER_API_KEY:?set MEMBER_API_KEY in .env}
+      # Clear ADMIN_API_URL in .env to run a members-only site with no admin
+      # pages at all.
+      SHADNET_ADMIN_API_URL: ${ADMIN_API_URL-http://127.0.0.1:${ADMIN_API_PORT:-31350}}
+      SHADNET_ADMIN_API_KEY: ${ADMIN_API_KEY:?set ADMIN_API_KEY in .env}
+      # The address players type into the emulator. Leave SHADNET_PUBLIC_HOST
+      # empty and the site shows whatever hostname the visitor reached it on,
+      # which is what you want on a dynamic IP -- there is nothing to go stale.
+      SHADNET_SERVER_HOST: ${SHADNET_PUBLIC_HOST:-}
+      SHADNET_SERVER_PORT: ${SHADNET_TCP_PORT:-31313}
+      # Leave empty to make visitors type the invite key on the form.
+      SHADNET_REGISTRATION_KEY: ${WEB_REGISTRATION_KEY:-}
+      SHADNET_REGISTRATION_ENABLED: ${WEB_REGISTRATION_ENABLED:-true}
+      SHADNET_MIN_PASSWORD_LENGTH: ${WEB_MIN_PASSWORD_LENGTH:-8}
+
+  # Opt-in: this service does not start with a plain `docker compose up`.
+  # Enable it with `docker compose --profile turn up -d` once the ports below
+  # are actually forwarded and SHADNET_TURN_EXTERNAL_IP is set. Running a
+  # relay that the internet cannot reach is worse than running none, because
+  # the server then advertises a candidate that silently never works.
+  coturn:
+    image: coturn/coturn:${COTURN_TAG:-4.6}
+    container_name: shadnet-coturn
+    restart: unless-stopped
+    profiles: ["turn"]
+    # Keep relay sockets on the host and preserve ports through the router.
+    network_mode: host
+    volumes:
+      - ./coturn/turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - ./coturn/entrypoint.sh:/etc/coturn/entrypoint.sh:ro
+    # The start-up copy below holds the shared secret. A tmpfs keeps it in
+    # memory: written into the container filesystem it would sit in
+    # /var/lib/docker on the host until the container was removed.
+    tmpfs:
+      - /tmp
+    environment:
+      TURN_SECRET: ${SHADNET_ICE_TURN_SECRET:-}
+      TURN_EXTERNAL_IP: ${SHADNET_TURN_EXTERNAL_IP:-}
+      TURN_EXTERNAL_FAMILY: ${SHADNET_TURN_EXTERNAL_FAMILY:-ipv4}
+      TURN_EXTERNAL_RECHECK_SECONDS: ${SHADNET_TURN_EXTERNAL_RECHECK_SECONDS:-300}
+      TURN_LISTEN_IP: ${SHADNET_TURN_LISTEN_IP:-}
+    # The secret and the public address are appended to a private copy of the
+    # config at start-up rather than passed as flags: a command line is
+    # readable by every process on the host, and this is the one value that
+    # lets anyone allocate on the relay.
+    entrypoint: ["/bin/sh", "/etc/coturn/entrypoint.sh"]
+
+volumes:
+  # A named volume, NOT a host bind mount. The server's SQLite locking is
+  # unreliable across Docker's filesystem-sharing layers; on a native volume
+  # it behaves correctly.
+  shadnet-data:
+  web-instance:
