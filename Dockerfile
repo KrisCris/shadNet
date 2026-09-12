@@ -4,9 +4,10 @@
 
 # Ubuntu 26.04 provides the Qt >= 6.8 HttpServer API used by shadNet.
 FROM ubuntu:26.04 AS build
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake ninja-build ca-certificates \
-        qt6-base-dev qt6-httpserver-dev qt6-websockets-dev \
+        qt6-base-dev qt6-httpserver-dev qt6-websockets-dev libqt6sql6-sqlite \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
