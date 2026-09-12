@@ -11,7 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /src
 # The build context includes the submodules checked out alongside this commit.
-COPY . .
+COPY CMakeLists.txt worlds.cfg scoreboards.cfg ./
+COPY externals/ externals/
+COPY src/ src/
+COPY tests/ tests/
 RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
     && cmake --build build --parallel 4 \
     && ctest --test-dir build --output-on-failure
@@ -33,6 +36,7 @@ RUN install -d /opt/shadnet/defaults /data \
     && printf 'source=%s\ncommit=%s\n' "$SOURCE_URL" "$VCS_REF" > /opt/shadnet/build-info.txt
 COPY --from=build /src/build/shadnet /opt/shadnet/shadnet
 COPY --from=build /src/worlds.cfg /src/scoreboards.cfg /opt/shadnet/defaults/
+COPY LICENSES/ /usr/share/doc/shadnet/LICENSES/
 COPY deployment/entrypoint.sh /usr/local/bin/shadnet-entrypoint
 
 # Relative paths resolve beside the binary; the entrypoint links them to /data.

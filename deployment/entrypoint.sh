@@ -13,7 +13,7 @@ DATA_DIR=${SHADNET_DATA_DIR:-/data}
 
 log() { printf '%s  %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 
-mkdir -p "$DATA_DIR/db" "$DATA_DIR/score_data"
+mkdir -p "$DATA_DIR/db" "$DATA_DIR/score_data" "$DATA_DIR/tss_data"
 
 # Seed configuration that ships with the build, but never overwrite a file the
 # operator has already edited.
@@ -65,7 +65,7 @@ fi
 
 # Point the app directory at the volume. Recreated every start so an image
 # upgrade cannot leave a stale link behind.
-for name in shadnet.cfg worlds.cfg scoreboards.cfg domains_banlist.txt db score_data; do
+for name in shadnet.cfg worlds.cfg scoreboards.cfg domains_banlist.txt db score_data tss_data; do
     rm -rf "$APP_DIR/$name"
     ln -s "$DATA_DIR/$name" "$APP_DIR/$name"
 done

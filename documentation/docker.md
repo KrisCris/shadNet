@@ -30,7 +30,8 @@ The default image tag follows `bloodborne-coop`. For repeatable deployments set
 `org.opencontainers.image.revision` label and `/opt/shadnet/build-info.txt` identify
 the source revision. Images currently target Linux amd64.
 
-The image runs as UID 10001. Its database, configuration and score data live in
+The image runs as UID 10001. Its database, configuration, score data and title
+storage files (`tss_data/`) live in
 the `shadnet_shadnet-data` volume, mounted at `/data`. Environment settings seed
 `shadnet.cfg` on first run only. To change an existing configuration, stop the
 server before editing that file; shadNet may write it during shutdown. Upgrades
@@ -86,6 +87,9 @@ names. Transfer the existing `.env` without regenerating keys. Replace
 using the web profile. Build-only `UBUNTU_RELEASE` and `SHADNET_UID` settings are
 retired; the image uses Ubuntu 26.04 and UID 10001. Copy the entire deployment
 directory, including both coturn files, and enable the profiles you already use.
+The old image left `tss_data/` inside the container. If you populated that
+directory, copy it from the stopped old container into `/data/tss_data/` before
+replacing the container. The new image keeps it on the persistent volume.
 Do not run `docker compose down -v`: it deletes persistent data.
 
 To roll back, restore the previous image references and run `up -d`. If the new

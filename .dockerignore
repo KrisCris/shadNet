@@ -8,6 +8,7 @@
 !externals/**
 !worlds.cfg
 !scoreboards.cfg
+!LICENSES/**
 !deployment/entrypoint.sh
 **/.git
 **/.git/**

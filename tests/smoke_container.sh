@@ -41,6 +41,7 @@ docker exec "$name" sh -ec '
     grep -qx "BloodborneSeamlessCoop=false" /data/shadnet.cfg
     grep -qx "IceTurnHost=relay.example.test" /data/shadnet.cfg
     echo persistent > /data/smoke-marker
+    echo title-storage > /opt/shadnet/tss_data/smoke.tss
 '
 # A container replacement must use the saved configuration, even if the new
 # environment specifies a different value.
@@ -49,6 +50,7 @@ docker rm "$name" >/dev/null
 start ignored.example.test
 docker exec "$name" sh -ec '
     grep -qx persistent /data/smoke-marker
+    grep -qx title-storage /opt/shadnet/tss_data/smoke.tss
     grep -qx "IceTurnHost=relay.example.test" /data/shadnet.cfg
 '
 if docker logs "$name" 2>&1 | grep -q 'Applied database migration'; then
