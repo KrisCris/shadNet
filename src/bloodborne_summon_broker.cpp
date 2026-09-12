@@ -502,16 +502,9 @@ SummonBroker::ClaimResult SummonBroker::Claim(const QJsonObject& request,
     const QJsonValue targetChara = request.value(QStringLiteral("TargetCharaId"));
 
     auto target = m_records.end();
-    if (!requestedSession.isEmpty()) {
-        for (auto it = m_records.begin(); it != m_records.end(); ++it) {
-            if (it->advertisement.value(QStringLiteral("SessionId")).toString() ==
-                requestedSession) {
-                target = it;
-                break;
-            }
-        }
-    }
-    if (target == m_records.end() && targetUser.has_value()) {
+    // SessionId can identify the requesting host, which may also have an
+    // advertisement. Explicit target IDs identify the player to summon.
+    if (targetUser.has_value()) {
         for (auto it = m_records.begin(); it != m_records.end(); ++it) {
             if (Integer(it->advertisement, QStringLiteral("UserId"), -1) != *targetUser) {
                 continue;
@@ -522,6 +515,14 @@ SummonBroker::ClaimResult SummonBroker::Claim(const QJsonObject& request,
             }
             if (target == m_records.end() || it->updatedAtMs > target->updatedAtMs) {
                 target = it;
+            }
+        }
+    } else if (!requestedSession.isEmpty()) {
+        for (auto it = m_records.begin(); it != m_records.end(); ++it) {
+            if (it->advertisement.value(QStringLiteral("SessionId")).toString() ==
+                requestedSession) {
+                target = it;
+                break;
             }
         }
     }

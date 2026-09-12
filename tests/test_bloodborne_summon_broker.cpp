@@ -371,6 +371,72 @@ int main() {
     CHECK(!visible(71, 91, 2, "hunt", "wrong"));
   }
 
+  // Both players can advertise while ringing the Sinister Bell. The host's
+  // claim carries its own session ID, even after cancelling its advertisement.
+  for (bool cancelHost : {false, true}) {
+    Bloodborne::SummonBroker invasion(1'000);
+    QByteArray invader = advertisement;
+    invader.replace("\"MatchingLevel\":46", "\"MatchingLevel\":71");
+    invader.replace("\"SummonType\":0", "\"SummonType\":2");
+    QByteArray host = invader;
+    host.replace("guest-session", "host-session");
+    host.replace("\"UserId\":2465", "\"UserId\":2466");
+    host.replace("\"CharaId\":9223372036854775808", "\"CharaId\":3");
+    host.replace("\"MatchingLevel\":71", "\"MatchingLevel\":91");
+    QByteArray invasionSearch = search;
+    invasionSearch.replace("\"MatchingLevel\":46", "\"MatchingLevel\":91");
+    invasionSearch.replace("\"SummonType\":0", "\"SummonType\":2");
+    QByteArray invasionClaim = claim;
+    invasionClaim.replace("guest-session", "host-session");
+
+    invasion.Advertise(Parse(invader), invader, 100);
+    invasion.Advertise(Parse(host), host, 101);
+    const auto candidates = invasion.Search(Parse(invasionSearch), 110);
+    CHECK(candidates.size() == 1);
+    CHECK(candidates.front() == invader);
+    if (cancelHost) {
+      const auto cancelled = invasion.Consume(
+          Parse(R"({"SessionId":"host-session","UserId":2466})"), 111);
+      CHECK(cancelled.consumed == 1);
+    }
+
+    const auto result = invasion.Claim(Parse(invasionClaim), invasionClaim, 112);
+    CHECK(result.status == Bloodborne::SummonBroker::ClaimStatus::Claimed);
+    CHECK(result.targetUserId == 2465);
+    CHECK(result.targetSessionId == QStringLiteral("guest-session"));
+    CHECK(invasion.StateFor(QStringLiteral("host-session"), 2466, 113) ==
+          (cancelHost ? Bloodborne::SummonBroker::State::Consumed
+                      : Bloodborne::SummonBroker::State::Advertised));
+    const auto notification = invasion.Advertise(Parse(invader), invader, 114);
+    CHECK(notification.state == Bloodborne::SummonBroker::State::Delivered);
+    CHECK(notification.pendingClaim == invasionClaim);
+    CHECK(Bloodborne::BuildClaimDeliveryResponse(notification.pendingClaim)
+              .contains("\"TargetCharaId\":9223372036854775808"));
+  }
+
+  // An explicit target must not fall back to an unrelated session. A matching
+  // session alone must not override a different target user or character.
+  {
+    Bloodborne::SummonBroker targets(1'000);
+    targets.Advertise(Parse(advertisement), advertisement, 100);
+    QByteArray missingUser = claim;
+    missingUser.replace("\"TargetUserId\":2465", "\"TargetUserId\":9999");
+    CHECK(targets.Claim(Parse(missingUser), missingUser, 110).status ==
+          Bloodborne::SummonBroker::ClaimStatus::NotFound);
+    QByteArray missingCharacter = claim;
+    missingCharacter.replace("\"TargetCharaId\":9223372036854775808",
+                             "\"TargetCharaId\":3");
+    CHECK(targets.Claim(Parse(missingCharacter), missingCharacter, 111).status ==
+          Bloodborne::SummonBroker::ClaimStatus::NotFound);
+    CHECK(targets.StateFor(QStringLiteral("guest-session"), 2465, 112) ==
+          Bloodborne::SummonBroker::State::Advertised);
+
+    const QByteArray sessionClaim =
+        R"({"SessionId":"guest-session","UserId":2466})";
+    CHECK(targets.Claim(Parse(sessionClaim), sessionClaim, 113).status ==
+          Bloodborne::SummonBroker::ClaimStatus::Claimed);
+  }
+
   std::cout << "Bloodborne summon broker state test passed\n";
   return 0;
 }
