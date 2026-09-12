@@ -76,6 +76,13 @@ ErrorType ClientSession::CmdPeerSignal(StreamExtractor& data, QByteArray& reply)
     if (!session.has_value())
         return ErrorType::NotFound;
 
+    if ((req.kind() == shadnet::PEER_SIGNAL_CANDIDATE ||
+         req.kind() == shadnet::PEER_SIGNAL_DESCRIPTION) &&
+        m_peerAddresses.AddCandidates(QString::fromStdString(req.payload()))) {
+        qInfo().noquote() << "Peer addresses:" << m_peerAddresses.Format(m_info.npid)
+                          << "session=" << req.session_id() << "gen=" << req.generation();
+    }
+
     const QString peerNpid = session->PeerOf(m_info.npid);
     int64_t peerUserId = -1;
     {

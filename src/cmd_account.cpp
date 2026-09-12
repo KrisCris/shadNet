@@ -209,6 +209,8 @@ ErrorType ClientSession::CmdLogin(StreamExtractor& data, QByteArray& reply) {
     }
 
     qInfo() << "Authenticated:" << npid;
+    m_peerAddresses.AddObserved(m_socket->peerAddress());
+    qInfo().noquote() << "Peer addresses:" << m_peerAddresses.Format(npid);
     return ErrorType::NoError;
 }
 

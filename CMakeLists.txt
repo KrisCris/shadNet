@@ -67,6 +67,7 @@ set(SOURCES
     src/matching.h
     src/cmd_matching.cpp
     src/peer_sessions.cpp
+    src/peer_address_log.cpp
     src/cmd_peer.cpp
     # WebAPI HTTP/JSON listener
     src/webapi_server.h
@@ -129,6 +130,11 @@ target_link_libraries(shadnet PRIVATE
 
 
 if(BUILD_TESTING)
+    add_executable(test_peer_address_log tests/test_peer_address_log.cpp src/peer_address_log.cpp)
+    target_include_directories(test_peer_address_log PRIVATE src)
+    target_link_libraries(test_peer_address_log PRIVATE Qt6::Core Qt6::Network)
+    add_test(NAME peer_address_log COMMAND test_peer_address_log)
+
     # Deliberately not EXCLUDE_FROM_ALL: a test ctest knows about but `all`
     # never builds reports "Not Run" rather than failing, which reads like a
     # pass in CI output. If BUILD_TESTING is on, build the test.

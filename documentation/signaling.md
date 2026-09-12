@@ -1,6 +1,6 @@
 # Signaling (peer sessions and ICE)
 
-How two players' emulators find a path to each other. The server pairs them and relays the ICE exchange; it never carries game traffic and never parses what it relays.
+How two players' emulators find a path to each other. The server pairs them and relays the ICE exchange; it never carries game traffic. It extracts candidate IP addresses for diagnostics without changing the relayed payload.
 
 ---
 
@@ -15,6 +15,34 @@ The server still drives no connection-state machine. ESTABLISHED, DEAD and activ
 ---
 
 ## Configuration
+
+### Address diagnostics
+
+After login, `Peer addresses: account: [IPs]` records the TCP source address.
+As ICE descriptions and candidates arrive, it adds IPv4 and IPv6 addresses
+and prints an updated, deduplicated list only when an address source changes.
+The list lasts for that authenticated connection.
+
+The suffix identifies each source:
+
+- `observed-tcp`: the address the server's socket actually sees.
+- `reported-host`: local interface candidates reported by the client, including IPv6 and VPN interfaces.
+- `reported-srflx` / `reported-prflx`: reflexive candidates reported by the client.
+- `reported-relay`: TURN relay candidates, which belong to the relay rather than the player's device.
+- `reported-related`: related addresses carried in candidate `raddr` fields.
+
+Both address families can appear in the same ICE exchange. Gathering starts
+when a peer connection is requested, so login alone does not produce the
+full candidate list. Client reports are not verified reachability, and a
+single TCP socket cannot reveal addresses hidden by NAT. The selected path
+and connection state still come from the client's ICE log. ICE passwords,
+user fragments, and TURN credentials are never included in address logs.
+
+Socket-only health checks do not open a per-client database connection.
+Unauthenticated connection/disconnection messages use debug level; login,
+authentication failures, and database errors retain their normal levels.
+
+### ICE servers
 
 | Setting | Default | Description |
 |---|---|---|
