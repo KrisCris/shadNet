@@ -130,6 +130,11 @@ target_link_libraries(shadnet PRIVATE
 
 
 if(BUILD_TESTING)
+    add_executable(test_database_migrations tests/test_database_migrations.cpp src/database.cpp)
+    target_include_directories(test_database_migrations PRIVATE src)
+    target_link_libraries(test_database_migrations PRIVATE Qt6::Core Qt6::Sql)
+    add_test(NAME database_migrations COMMAND test_database_migrations)
+
     add_executable(test_peer_address_log tests/test_peer_address_log.cpp src/peer_address_log.cpp)
     target_include_directories(test_peer_address_log PRIVATE src)
     target_link_libraries(test_peer_address_log PRIVATE Qt6::Core Qt6::Network)

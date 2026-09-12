@@ -81,7 +81,7 @@ bool Database::Open(const QString& path) {
     Exec("PRAGMA journal_mode=WAL");
     Exec("PRAGMA foreign_keys=ON");
     Exec("PRAGMA busy_timeout=5000");
-    return Migrate();
+    return true;
 }
 
 bool Database::Exec(const QString& sql) {
@@ -100,17 +100,54 @@ bool Database::Exec(QSqlQuery& q) {
     return true;
 }
 
-bool Database::HasMigration(int id) {
-    QSqlQuery q(m_db);
-    q.prepare("SELECT COUNT(*) FROM migration WHERE migration_id=?");
-    q.addBindValue(id);
-    return Exec(q) && q.next() && q.value(0).toInt() > 0;
+bool Database::ApplyMigration(int id, const QString& description, const QStringList& statements) {
+    QSqlQuery existing(m_db);
+    existing.prepare("SELECT 1 FROM migration WHERE migration_id=?");
+    existing.addBindValue(id);
+    if (!Exec(existing)) {
+        qCritical() << "Cannot read database migration" << id << ":" << m_lastError;
+        return false;
+    }
+    if (existing.next())
+        return true;
+    existing.finish();
+
+    if (!m_db.transaction()) {
+        qCritical() << "Cannot start database migration" << id << ":" << m_db.lastError().text();
+        return false;
+    }
+    for (const QString& statement : statements) {
+        if (!Exec(statement)) {
+            qCritical() << "Database migration" << id << "failed:" << m_lastError;
+            m_db.rollback();
+            return false;
+        }
+    }
+    QSqlQuery record(m_db);
+    record.prepare("INSERT INTO migration(migration_id, description) VALUES(?, ?)");
+    record.addBindValue(id);
+    record.addBindValue(description);
+    if (!Exec(record)) {
+        qCritical() << "Cannot record database migration" << id << ":" << m_lastError;
+        m_db.rollback();
+        return false;
+    }
+    if (!m_db.commit()) {
+        qCritical() << "Cannot commit database migration" << id << ":" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    qInfo() << "Applied database migration" << id << ":" << description;
+    return true;
 }
 
 bool Database::Migrate() {
-    Exec("CREATE TABLE IF NOT EXISTS migration("
-         "  migration_id UNSIGNED INTEGER PRIMARY KEY,"
-         "  description  TEXT NOT NULL)");
+    if (!Exec("CREATE TABLE IF NOT EXISTS migration("
+              "  migration_id UNSIGNED INTEGER PRIMARY KEY,"
+              "  description  TEXT NOT NULL)")) {
+        qCritical() << "Cannot initialise migration table:" << m_lastError;
+        return false;
+    }
 
     // Migration 1: core tables
     QStringList stmts1 = {
@@ -220,12 +257,8 @@ bool Database::Migrate() {
         "  PRIMARY KEY(communication_id, virtual_user, slot_id))",
     };
 
-    for (const QString& s : stmts1)
-        Exec(s);
-
-    QSqlQuery ins(m_db);
-    ins.prepare("INSERT OR IGNORE INTO migration VALUES(1,'Initial setup')");
-    Exec(ins);
+    if (!ApplyMigration(1, "Initial setup", stmts1))
+        return false;
 
     QStringList stmts2 = {
         "CREATE TABLE IF NOT EXISTS title_name("
@@ -233,19 +266,14 @@ bool Database::Migrate() {
         "  title_name       TEXT NOT NULL)",
     };
 
-    for (const QString& s : stmts2)
-        Exec(s);
+    if (!ApplyMigration(2, "title_name mapping", stmts2))
+        return false;
 
-    QSqlQuery ins2(m_db);
-    ins2.prepare("INSERT OR IGNORE INTO migration VALUES(2,'title_name mapping')");
-    Exec(ins2);
-
-    if (!HasMigration(3)) {
-        Exec("ALTER TABLE account ADD COLUMN ban_reason TEXT");
-        Exec("ALTER TABLE account ADD COLUMN ban_timestamp INTEGER");
-
-        // Append-only record of every privileged action taken through the admin API.
-        Exec("CREATE TABLE IF NOT EXISTS admin_audit("
+    if (!ApplyMigration(
+            3, "admin tooling: ban metadata + audit log",
+            {"ALTER TABLE account ADD COLUMN ban_reason TEXT",
+             "ALTER TABLE account ADD COLUMN ban_timestamp INTEGER",
+             "CREATE TABLE IF NOT EXISTS admin_audit("
              "  id             INTEGER PRIMARY KEY AUTOINCREMENT,"
              "  timestamp      INTEGER NOT NULL,"
              "  actor_user_id  INTEGER NOT NULL,"
@@ -253,82 +281,57 @@ bool Database::Migrate() {
              "  action         TEXT    NOT NULL,"
              "  target_user_id INTEGER,"
              "  target_npid    TEXT,"
-             "  reason         TEXT)");
-        Exec("CREATE INDEX IF NOT EXISTS admin_audit_time ON admin_audit(timestamp DESC)");
-
-        QSqlQuery ins3(m_db);
-        ins3.prepare("INSERT OR IGNORE INTO migration VALUES(3,'admin tooling: ban metadata + "
-                     "audit log')");
-        Exec(ins3);
-    }
+             "  reason         TEXT)",
+             "CREATE INDEX IF NOT EXISTS admin_audit_time ON admin_audit(timestamp DESC)"}))
+        return false;
 
     // Migration 4: per-account trophy records.
-    if (!HasMigration(4)) {
-        Exec("CREATE TABLE IF NOT EXISTS user_trophies("
-             "  user_id          UNSIGNED BIGINT NOT NULL,"
-             "  communication_id TEXT            NOT NULL,"
-             "  trophy_id        INTEGER         NOT NULL,"
-             "  earned_at        UNSIGNED BIGINT NOT NULL,"
-             "  PRIMARY KEY(user_id, communication_id, trophy_id),"
-             "  FOREIGN KEY(user_id) REFERENCES account(user_id) ON DELETE CASCADE)");
-        // Earned-percentage and per-game stats scan by com id, not by user.
-        Exec("CREATE INDEX IF NOT EXISTS user_trophies_game "
-             "ON user_trophies(communication_id, trophy_id)");
-
-        QSqlQuery ins4(m_db);
-        ins4.prepare("INSERT OR IGNORE INTO migration VALUES(4,'user trophy records')");
-        Exec(ins4);
-    }
+    if (!ApplyMigration(4, "user trophy records",
+                        {"CREATE TABLE IF NOT EXISTS user_trophies("
+                         "  user_id          UNSIGNED BIGINT NOT NULL,"
+                         "  communication_id TEXT            NOT NULL,"
+                         "  trophy_id        INTEGER         NOT NULL,"
+                         "  earned_at        UNSIGNED BIGINT NOT NULL,"
+                         "  PRIMARY KEY(user_id, communication_id, trophy_id),"
+                         "  FOREIGN KEY(user_id) REFERENCES account(user_id) ON DELETE CASCADE)",
+                         "CREATE INDEX IF NOT EXISTS user_trophies_game "
+                         "ON user_trophies(communication_id, trophy_id)"}))
+        return false;
 
     // Migration 5: trophy metadata, imported by an operator from a title's
     // TROP.XML.
-    if (!HasMigration(5)) {
-        Exec("CREATE TABLE IF NOT EXISTS trophy_meta("
-             "  communication_id TEXT    NOT NULL,"
-             "  trophy_id        INTEGER NOT NULL,"
-             "  name             TEXT    NOT NULL,"
-             "  detail           TEXT,"
-             "  grade            TEXT," // B, S, G or P
-             "  hidden           BOOL    NOT NULL DEFAULT 0,"
-             "  group_id         INTEGER NOT NULL DEFAULT 0,"
-             "  language         TEXT," // which TROP_xx.XML it came from
-             "  imported_at      UNSIGNED BIGINT NOT NULL,"
-             "  PRIMARY KEY(communication_id, trophy_id))");
-
-        QSqlQuery ins5(m_db);
-        ins5.prepare("INSERT OR IGNORE INTO migration VALUES(5,'trophy metadata')");
-        Exec(ins5);
-    }
+    if (!ApplyMigration(5, "trophy metadata",
+                        {"CREATE TABLE IF NOT EXISTS trophy_meta("
+                         "  communication_id TEXT    NOT NULL,"
+                         "  trophy_id        INTEGER NOT NULL,"
+                         "  name             TEXT    NOT NULL,"
+                         "  detail           TEXT,"
+                         "  grade            TEXT," // B, S, G or P
+                         "  hidden           BOOL    NOT NULL DEFAULT 0,"
+                         "  group_id         INTEGER NOT NULL DEFAULT 0,"
+                         "  language         TEXT," // which TROP_xx.XML it came from
+                         "  imported_at      UNSIGNED BIGINT NOT NULL,"
+                         "  PRIMARY KEY(communication_id, trophy_id))"}))
+        return false;
 
     // Migration 6
-    if (!HasMigration(6)) {
-        Exec("ALTER TABLE account ADD COLUMN client_version TEXT");
-        Exec("ALTER TABLE account ADD COLUMN client_version_at UNSIGNED BIGINT");
-
-        QSqlQuery ins6(m_db);
-        ins6.prepare("INSERT OR IGNORE INTO migration VALUES(6,'client version')");
-        Exec(ins6);
-    }
+    if (!ApplyMigration(6, "client version",
+                        {"ALTER TABLE account ADD COLUMN client_version TEXT",
+                         "ALTER TABLE account ADD COLUMN client_version_at UNSIGNED BIGINT"}))
+        return false;
 
     // Migration 7: trophy group names, so DLC packs can be shown as their own
     // sections rather than mixed into the base game's list. Comes from the same
     // TROP.XML as the trophy names.
-    if (!HasMigration(7)) {
-        Exec("CREATE TABLE IF NOT EXISTS trophy_group("
-             "  communication_id TEXT    NOT NULL,"
-             "  group_id         INTEGER NOT NULL,"
-             "  name             TEXT    NOT NULL,"
-             "  detail           TEXT,"
-             "  PRIMARY KEY(communication_id, group_id))");
+    if (!ApplyMigration(7, "trophy groups",
+                        {"CREATE TABLE IF NOT EXISTS trophy_group("
+                         "  communication_id TEXT    NOT NULL,"
+                         "  group_id         INTEGER NOT NULL,"
+                         "  name             TEXT    NOT NULL,"
+                         "  detail           TEXT,"
+                         "  PRIMARY KEY(communication_id, group_id))"}))
+        return false;
 
-        QSqlQuery ins7(m_db);
-        ins7.prepare("INSERT OR IGNORE INTO migration VALUES(7,'trophy groups')");
-        Exec(ins7);
-    }
-
-    qInfo() << "Database migrations complete";
-
-    RunMaintenance();
     return true;
 }
 

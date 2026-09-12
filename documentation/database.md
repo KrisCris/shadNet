@@ -194,3 +194,15 @@ After a successful `RecordScore`, the client may optionally call `RecordScoreDat
 Large per-score blobs are stored on disk as `score_data/<20-digit-id>.sdt` rather than in SQLite. This avoids bloating the database with multi-megabyte BLOBs. The `data_id` column is the link between a score row and its file. On server startup, any `.sdt` files whose IDs are not referenced by any `data_id` column are deleted as orphans.
 
 ---
+# Database startup and migrations
+
+`Database::Open()` opens a connection and sets its SQLite pragmas. It does
+not migrate the schema or run maintenance. `ShadNetServer::Start()` calls
+`Migrate()` and `RunMaintenance()` before opening its listeners, so client
+connections and statistics queries do not repeat startup work.
+
+Each pending migration runs in a transaction. Its version is recorded only
+after its statements succeed, and an error rolls back that migration and
+stops startup. An `Applied database migration` log is emitted after commit;
+opening an existing database with no pending migrations produces no migration
+completion messages. Migration numbers and the existing schema are unchanged.

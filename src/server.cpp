@@ -40,10 +40,11 @@ bool ShadNetServer::Start(ConfigManager* config) {
     QDir().mkpath("db");
 
     Database schemaInit(QStringLiteral("shadnet_schema_init"));
-    if (!schemaInit.Open(m_dbPath)) {
+    if (!schemaInit.Open(m_dbPath) || !schemaInit.Migrate()) {
         qCritical() << "Start: DB schema initialisation failed";
         return false;
     }
+    schemaInit.RunMaintenance();
 
     // Score subsystem should run after DB path is set.
     if (!InitScoreSystem()) {

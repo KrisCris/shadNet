@@ -117,6 +117,7 @@ public:
     ~Database();
 
     bool Open(const QString& path = "db/rpcn.db");
+    // Run once at startup, before accepting client or HTTP requests.
     bool Migrate();
     bool IsOpen() const;
     QSqlDatabase Conn() const {
@@ -352,7 +353,7 @@ public:
 private:
     bool Exec(const QString& sql);
     bool Exec(QSqlQuery& q);
-    bool HasMigration(int id);
+    bool ApplyMigration(int id, const QString& description, const QStringList& statements);
     bool PurgeUserDataStatements(int64_t userId, PurgeSummary& summary);
     void CollectScoreDataIds(int64_t userId, PurgeSummary& summary);
     static QString BuildUserFilterClause(const QString& search, UserFilter filter,
