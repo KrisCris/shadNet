@@ -126,9 +126,9 @@ void ClientSession::ProcessPacket(uint16_t command, uint64_t packetId, const QBy
     // log, which is exactly the pair you need to tell apart when a summon does
     // not complete.
     if (result != ErrorType::NoError) {
-        qWarning().nospace() << "Command " << static_cast<uint16_t>(cmdOpt)
-                             << " from " << (m_info.npid.isEmpty() ? QStringLiteral("<unauthenticated>")
-                                                                   : m_info.npid)
+        qWarning().nospace() << "Command " << static_cast<uint16_t>(cmdOpt) << " from "
+                             << (m_info.npid.isEmpty() ? QStringLiteral("<unauthenticated>")
+                                                       : m_info.npid)
                              << " failed: " << ErrorTypeName(result);
     }
     reply[static_cast<int>(HEADER_SIZE)] = static_cast<char>(static_cast<uint8_t>(result));

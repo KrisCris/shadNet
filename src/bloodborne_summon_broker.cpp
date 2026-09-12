@@ -133,9 +133,8 @@ bool MatchesSearch(const QJsonObject& request, const QJsonObject& sign, bool any
     // what the player can summon.
     const qint64 requestLevel = Integer(request, QStringLiteral("MatchingLevel"), -1);
     const qint64 signLevel = Integer(sign, QStringLiteral("MatchingLevel"), -1);
-    const bool isInvasion =
-        static_cast<int>(Integer(sign, QStringLiteral("SummonType"), SummonTypeCoopGuest)) ==
-        SummonTypeInvader;
+    const bool isInvasion = static_cast<int>(Integer(sign, QStringLiteral("SummonType"),
+                                                     SummonTypeCoopGuest)) == SummonTypeInvader;
     // A matching password lifts the level restriction for co-op only; in vanilla
     // it does not affect invasions.
     const bool passwordBypass = !requestWord.isEmpty() && !isInvasion;

@@ -85,8 +85,7 @@ QString BearerToken(const QHttpServerRequest& req) {
 }
 
 QString PeerOf(const QHttpServerRequest& req, const ConfigManager* config) {
-    return ShadNet::ResolvePeer(
-        req, config ? config->GetApiTrustedProxies() : QStringList());
+    return ShadNet::ResolvePeer(req, config ? config->GetApiTrustedProxies() : QStringList());
 }
 
 bool ValidNpid(const QString& npid) {

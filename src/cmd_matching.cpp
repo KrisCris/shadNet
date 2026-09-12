@@ -664,8 +664,8 @@ ErrorType ClientSession::CmdJoinRoom(StreamExtractor& data, QByteArray& reply) {
     // Logged on entry, not only on success: the interesting failure is a guest
     // that asks to join and is turned away, and every refusal below is silent
     // to the client's user.
-    qInfo() << "JoinRoom: " << m_info.npid << "requests room" << roomId << "key="
-            << m_matching.matchingKey;
+    qInfo() << "JoinRoom: " << m_info.npid << "requests room" << roomId
+            << "key=" << m_matching.matchingKey;
 
     uint16_t myMemberId = 0;
     uint16_t maxSlot = 0;

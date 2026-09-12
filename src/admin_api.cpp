@@ -119,8 +119,7 @@ bool SecretsEqual(const QByteArray& a, const QByteArray& b) {
 }
 
 QString PeerKey(const QHttpServerRequest& req, const ConfigManager* config) {
-    return ShadNet::ResolvePeer(
-        req, config ? config->GetApiTrustedProxies() : QStringList());
+    return ShadNet::ResolvePeer(req, config ? config->GetApiTrustedProxies() : QStringList());
 }
 
 } // namespace

@@ -32,8 +32,7 @@ inline bool IsTrustedProxy(const QHostAddress& addr, const QStringList& trusted)
         if (e.isEmpty())
             continue;
         if (e.compare(QLatin1String("local"), Qt::CaseInsensitive) == 0) {
-            if (addr.isLoopback() ||
-                addr.isInSubnet(QHostAddress(QStringLiteral("10.0.0.0")), 8) ||
+            if (addr.isLoopback() || addr.isInSubnet(QHostAddress(QStringLiteral("10.0.0.0")), 8) ||
                 addr.isInSubnet(QHostAddress(QStringLiteral("172.16.0.0")), 12) ||
                 addr.isInSubnet(QHostAddress(QStringLiteral("192.168.0.0")), 16) ||
                 addr.isInSubnet(QHostAddress(QStringLiteral("fc00::")), 7)) {
